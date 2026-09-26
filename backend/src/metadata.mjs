@@ -14,6 +14,26 @@ export async function saveMetadata(config,input) {
  const filename=`${hash(doc)}.json`;await writeFile(resolve(config.metadataDir,filename),doc,{mode:0o644});
  return {uri:await compactMetadata(config,`${config.origin}/api/metadata/${filename}`),image};
 }
+// Existing launches carry their original links in the immutable on-chain
+// metadata. Read the local content-addressed copy rather than trusting a URL
+// supplied by a caller or doing an outbound fetch in a public API request.
+export async function tokenSocials(config,uri){
+ const empty={website:null,telegram:null,twitter:null};
+ try{
+  const path=new URL(uri).pathname;
+  const compact=/^\/api\/m\/([A-Za-z0-9_-]{22})$/.exec(path);
+  const long=/^\/api\/metadata\/([a-f0-9]{64}\.json)$/.exec(path);
+  if(!compact&&!long)return empty;
+  const file=compact?`${compact[1]}.json`:long[1];
+  const doc=JSON.parse(await readFile(resolve(config.metadataDir,file),'utf8'));
+  const links=doc.extensions||{};
+  const safe=value=>{
+   if(typeof value!=='string'||value.length>200)return null;
+   try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password?url.toString():null;}catch{return null;}
+  };
+  return {website:safe(links.website),telegram:safe(links.telegram),twitter:safe(links.twitter)};
+ }catch{return empty;}
+}
 export function metadataRoutes(app,config){app.get('/api/metadata/:filename',async(req,reply)=>{
  const filename=req.params.filename;need(/^[a-f0-9]{64}\.(png|jpeg|webp|json)$/.test(filename),404,'File not found');
  let bytes;try{bytes=await readFile(resolve(config.metadataDir,filename));}catch{need(false,404,'File not found');}

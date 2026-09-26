@@ -1,6 +1,6 @@
 export type Token = {id:string;name:string;symbol:string;recipient:string|null;source:'platform'|'official';imageUrl:string;marketCap:number|null;fees:number;age:string;hours:number;lastTradeSeconds:number|null;mint:string;signature:string;description?:string;confirmedAt:string;earnedLamports:string;collectedLamports:string};
 
-export type PublicToken = {market_cap_usd?:number|null;last_trade_at?:string|null;launcher_wallet?:string;source?:'platform'|'official';id:string;mint:string;name:string;symbol:string;description?:string;image_uri:string;recipient_handle:string|null;confirmed_at:string;signature:string;earned_lamports:string;collected_lamports:string};
+export type PublicToken = {market_cap_usd?:number|null;last_trade_at?:string|null;launcher_wallet?:string;source?:'platform'|'official';socials?:{website:string|null;telegram:string|null;twitter:string|null};id:string;mint:string;name:string;symbol:string;description?:string;image_uri:string;recipient_handle:string|null;confirmed_at:string;signature:string;earned_lamports:string;collected_lamports:string};
 
 export type RecentCollection = {event_id:string;signature:string;recipient_handle:string;gross:string;recipient:string;project:string;received_at:string;launch_id:string;token_name:string;token_image:string};
 export type RecentClaim = {id:string;handle:string;amount:string;signature:string;confirmed_at:string};

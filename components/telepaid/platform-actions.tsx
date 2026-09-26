@@ -4,11 +4,12 @@ import bs58 from 'bs58';
 import {fromPublicToken,type Token,type PublicToken,type PublicAnalytics} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
 import {rememberVerifiedSession,signOutBrowser,telegramSessionVersionKey,walletDisconnectedKey} from './sign-out';
+import {CopyAddress} from './copy-address';
 
 type Runtime={integrated?:boolean;telegram:boolean;telegramBotUsername?:string;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
 type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{earned:string;available:string;reserved:string;settled:string}};
 type Claim={id:string;status:string;signature?:string};
-export type Launch={id:string;mint:string;name:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;launchFormat?:string;buy?:{status:string;transaction:string;signature?:string}};
+export type Launch={id:string;mint:string;name:string;symbol?:string;image?:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;networkFeeLamports?:string;launchFormat?:string;buy?:{status:string;transaction:string;signature?:string}};
 export async function request<T=any>(path:string,body?:unknown,headers:Record<string,string>={}){
  const r=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'content-type':'application/json',...headers},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(45000)});
  const data=await r.json() as T&{error?:string};if(!r.ok)throw new Error(data.error||'The request could not be completed');return data;
@@ -115,24 +116,35 @@ export function TelegramAction({onVerified}:{onVerified?:(username:string)=>void
 }
 export function LaunchAction({form,image,onCreated}:{onCreated:(id:string)=>void;form:{name:string;symbol:string;recipient:string;description:string;website:string;telegram:string;twitter:string;initialBuy:string};image:string}){
  const wallet=useTeleWallet(),{runtime,refreshTokens}=usePlatform(),{busy,error,run}=useOperation();
- const [launch,setLaunch]=useState<Launch|null>(null),[notice,setNotice]=useState('');const key=useRef(crypto.randomUUID());
+ const [launch,setLaunch]=useState<Launch|null>(null),[notice,setNotice]=useState('');
  const storageKey=`telepaid:launch:${runtime?.cluster}:${wallet.address}`;
- const opened=useRef('');
+ const opened=useRef(''),started=useRef('');
  useEffect(()=>{if(launch?.status==='confirmed'&&opened.current!==launch.id){opened.current=launch.id;void refreshTokens();onCreated(launch.id)}},[launch?.status,launch?.id,onCreated,refreshTokens]);
- useEffect(()=>{let active=true;if(!runtime?.integrated||!wallet.address)return;const id=localStorage.getItem(storageKey);if(id)void request('/api/auth/wallet/session').then(s=>s.address===wallet.address?request(`/api/launches/${id}`):null).then(l=>{if(active&&l&&!['confirmed','failed','expired'].includes(l.status))setLaunch(l)}).catch(()=>{});return()=>{active=false}},[storageKey,runtime?.integrated,wallet.address]);
- useEffect(()=>{if(!launch||!['submitted','preparing'].includes(launch.status))return;const id=setInterval(()=>{void request(`/api/launches/${launch.id}`).then(setLaunch).catch(()=>{})},5000);return()=>clearInterval(id)},[launch]);
- async function prepare(){const saved=localStorage.getItem(storageKey);if(saved){await ensureLauncher(wallet);const previous=await request<Launch>(`/api/launches/${saved}`);if(!['confirmed','failed','expired'].includes(previous.status)){setLaunch(previous);setNotice('Resuming your saved launch. Its name, recipient and initial buy are shown below.');return;}localStorage.removeItem(storageKey);}if(!image)throw new Error('Upload a token image first');const s=await ensureLauncher(wallet);const row=await request('/api/launches/prepare',{...form,wallet:wallet.address,image,initialBuyLamports:lamports(form.initialBuy)}, {'x-csrf-token':s.csrf,'idempotency-key':key.current});localStorage.setItem(storageKey,row.id);setLaunch(row);setNotice('Transaction prepared. Review the network and recipient before signing.');}
- async function refresh(){const s=await ensureLauncher(wallet);setLaunch(await request(`/api/launches/${launch!.id}/refresh`,{}, {'x-csrf-token':s.csrf}));}
- async function signCreate(){const s=await ensureLauncher(wallet);if(launch!.launchFormat!=='atomic-v1')throw new Error('Refresh this launch transaction before signing.');setNotice('Review token creation and your initial buy in one transaction.');const signed=await wallet.signTransaction(decode(launch!.transaction));setLaunch(await request(`/api/launches/${launch!.id}/submit`,{transaction:encode(signed)}, {'x-csrf-token':s.csrf}));setNotice('Submitted. Waiting for Solana finalization; you can return to this launch.');}
- return <><p className="field-help">{runtime?.cluster==='mainnet-beta'?'Solana Mainnet · Real SOL':'Solana Devnet'} · Recipient @{launch?.recipientHandle||form.recipient}</p>
- <p className="field-help">Initial buy: {launch?asSOL(launch.initialBuyLamports):form.initialBuy||'0'} SOL, included in the same creation transaction (up to 1% slippage). Network fees and account rent are additional.</p>
- {!wallet.address&&<WalletButton className="btn white"/>}
- {!launch&&<button className="btn white" disabled={busy||!wallet.address||!runtime?.launch} onClick={()=>void run(prepare)}>{busy?'Preparing…':'Prepare on-chain launch'}</button>}
- {launch&&<><p className="field-help" role="status">{launch.name} · {launch.status}</p><p className="live-address">{launch.mint}</p><TransactionLink signature={launch.signature} cluster={runtime?.cluster}/>
- {launch.status==='prepared'&&launch.launchFormat==='atomic-v1'&&<button className="btn white" disabled={busy||!runtime?.launch} onClick={()=>void run(signCreate)}>{busy?'Waiting for wallet…':'Sign & create token'}</button>}
- {['expired','failed','prepared'].includes(launch.status)&&<button className="btn outline" disabled={busy||!runtime?.launch} onClick={()=>void run(refresh)}>Refresh this launch transaction</button>}
- {['confirmed','failed','expired'].includes(launch.status)&&<button className="text-link" disabled={busy} onClick={()=>{setLaunch(null);localStorage.removeItem(storageKey);key.current=crypto.randomUUID();setNotice('');}}>Start another launch</button>}</>}
- {!runtime?.launch&&<p className="field-help">On-chain launches are paused while the launch service is prepared.</p>}{notice&&<p className="field-help" role="status">{notice}</p>}{error&&<p className="form-error" role="alert">{error}</p>}</>;
+ useEffect(()=>{if(!launch||!['submitted','preparing'].includes(launch.status))return;const id=setInterval(()=>{void request<Launch>(`/api/launches/${launch.id}`).then(setLaunch).catch(()=>{})},5000);return()=>clearInterval(id)},[launch]);
+ async function prepare(){
+  const saved=localStorage.getItem(storageKey);
+  if(saved){await ensureLauncher(wallet);const previous=await request<Launch>(`/api/launches/${saved}`);if(!['confirmed','failed','expired'].includes(previous.status)){setLaunch(previous);setNotice('Resumed your saved launch. Review it before signing.');return;}localStorage.removeItem(storageKey);localStorage.removeItem(`${storageKey}:intent`);}
+  if(!image)throw new Error('Upload a token image first');
+  const session=await ensureLauncher(wallet);
+  const intentKey=localStorage.getItem(`${storageKey}:intent`)||crypto.randomUUID();localStorage.setItem(`${storageKey}:intent`,intentKey);
+  const row=await request<Launch>('/api/launches/prepare',{...form,wallet:wallet.address,image,initialBuyLamports:lamports(form.initialBuy)}, {'x-csrf-token':session.csrf,'idempotency-key':intentKey});
+  localStorage.setItem(storageKey,row.id);setLaunch(row);setNotice('Transaction prepared. Check the details, then sign in your wallet.');
+ }
+ useEffect(()=>{if(!wallet.address||!runtime?.launch)return;const identity=`${runtime.cluster}:${wallet.address}`;if(started.current===identity)return;started.current=identity;void run(prepare);},[wallet.address,runtime?.launch,runtime?.cluster]);
+ async function refresh(){const session=await ensureLauncher(wallet);setLaunch(await request<Launch>(`/api/launches/${launch!.id}/refresh`,{}, {'x-csrf-token':session.csrf}));}
+ async function signCreate(){const session=await ensureLauncher(wallet);if(launch!.launchFormat!=='atomic-v1')throw new Error('Refresh this launch transaction before signing.');setNotice('Approve token creation and the initial buy in your wallet.');const signed=await wallet.signTransaction(decode(launch!.transaction));setLaunch(await request<Launch>(`/api/launches/${launch!.id}/submit`,{transaction:encode(signed)}, {'x-csrf-token':session.csrf}));setNotice('Submitted. Waiting for Solana finalization; your launch remains saved.');}
+ const submitted=launch&&['submitted','confirmed'].includes(launch.status);
+ return <div className="launch-review">
+  <div className="launch-review-token"><img src={launch?.image||image} alt="Token preview"/><span><strong>{launch?.name||form.name}</strong><small>{launch?.symbol||form.symbol} · Pump.fun</small></span>{launch?.status==='prepared'&&<span className="status-tag">Ready to sign</span>}</div>
+  <dl className="launch-review-facts"><div><dt>Network</dt><dd>{runtime?.cluster==='devnet'?'Solana Devnet':'Solana Mainnet'}</dd></div><div><dt>Signing wallet</dt><dd className="review-address">{wallet.address?`${wallet.address.slice(0,6)}…${wallet.address.slice(-6)}`:'Connect wallet'}</dd></div><div><dt>Telegram recipient</dt><dd>@{launch?.recipientHandle||form.recipient}</dd></div><div><dt>Initial buy</dt><dd>{launch?asSOL(launch.initialBuyLamports):form.initialBuy||'0'} SOL</dd></div><div><dt>Pump trade fee · launch</dt><dd>1.25%</dd></div><div><dt>Received creator fees</dt><dd>80% recipient · 20% TelePay</dd></div>{launch?.networkFeeLamports&&<div><dt>Estimated network fee</dt><dd>{asSOL(launch.networkFeeLamports)} SOL</dd></div>}</dl>
+  {launch?.mint&&<div className="launch-review-mint"><span>Mint address</span><CopyAddress address={launch.mint} full/></div>}
+  <p className="launch-review-footnote">Trading fees follow Pump.fun and can change after graduation. A buy has up to 1% price slippage; account rent and final costs appear in your wallet.</p>
+  {!wallet.address?<WalletButton className="btn white full"/>:!launch?<button className="btn white full" disabled={busy||!runtime?.launch} onClick={()=>void run(prepare)}>{busy?'Preparing transaction…':'Retry preparation'}</button>:null}
+  {launch?.status==='prepared'&&launch.launchFormat==='atomic-v1'&&<button className="btn white full" disabled={busy||!runtime?.launch} onClick={()=>void run(signCreate)}>{busy?'Waiting for wallet…':'Sign & create token'}</button>}
+  {launch&&['expired','failed','prepared'].includes(launch.status)&&<button className="btn outline full" disabled={busy||!runtime?.launch} onClick={()=>void run(refresh)}>Refresh transaction</button>}
+  {submitted&&<p className="launch-review-state" role="status">{launch.status==='confirmed'?'Launch confirmed':'Waiting for Solana finalization…'} <TransactionLink signature={launch.signature} cluster={runtime?.cluster}/></p>}
+  {!runtime?.launch&&<p className="field-help">On-chain launches are currently paused.</p>}{notice&&<p className="field-help" role="status">{notice}</p>}{error&&<p className="form-error" role="alert">{error}</p>}
+ </div>;
 }
 export function ClaimAccount({onVerify}:{onVerify:(claimAfterVerification?:boolean)=>void}){
  const {session,runtime,refresh}=usePlatform(),wallet=useTeleWallet(),{busy,error,run}=useOperation();

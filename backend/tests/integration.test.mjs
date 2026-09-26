@@ -66,6 +66,20 @@ test('official mint waits for an authenticated Pump create, appears publicly and
  }finally{await f.db.close();}
 });
 
+test('token detail restores optional social links from existing saved metadata without inventing missing links',async()=>{
+ const f=await fixture();const {mkdtemp,writeFile,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const dir=await mkdtemp(join(tmpdir(),'telepay-social-'));f.config.metadataDir=dir;
+ const app=await buildApp({...f,chain:{}});try{
+  const empty=(await app.inject('/api/public/token/launch1')).json();assert.deepEqual(empty.socials,{website:null,telegram:null,twitter:null});
+  const id='A'.repeat(22);
+  await writeFile(join(dir,`${id}.json`),JSON.stringify({extensions:{website:'https://example.org/coin',twitter:'https://x.com/example',telegram:'javascript:alert(1)'}}));
+  await f.db.query('UPDATE launches SET metadata_uri=$2 WHERE id=$1',['launch1',`https://old-railway.example/api/m/${id}`]);
+  const token=(await app.inject('/api/public/token/launch1')).json();
+  assert.equal(token.socials.website,'https://example.org/coin');assert.equal(token.socials.twitter,'https://x.com/example');assert.equal(token.socials.telegram,null);
+  assert.equal(Object.hasOwn(token,'metadata_uri'),false);
+ }finally{await app.close();await f.db.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('fee events are idempotent; exact 80/20 is credited to the handle, not the creator or original account ID',async()=>{
  const f=await fixture();try{
   const event={eventId:'event1',launchId:'launch1',recipientHandle:'Hamoon',signature:'sig1',lamports:10000000001n,slot:1};

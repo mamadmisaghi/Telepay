@@ -8,7 +8,7 @@ import {authRoutes,sessionFor} from './auth.mjs';
 import {marketRoutes} from './market.mjs';
 import {recipientRoutes} from './recipients.mjs';
 import {launchRoutes} from './launches.mjs';
-import {metadataRoutes,compactMetadataRoutes} from './metadata.mjs';
+import {metadataRoutes,compactMetadataRoutes,tokenSocials} from './metadata.mjs';
 import {reserveClaim,normalizeHandle} from './ledger.mjs';
 import {readiness} from './config.mjs';
 import {equal} from './crypto.mjs';
@@ -63,7 +63,7 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
   return {profiles,nextOffset:rows.length>24?offset+24:null};
  });
  app.get('/api/public/token/:id',async req=>{
-  const {rows:[token]}=await db.query("SELECT l.id,l.mint,l.source,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND l.id=$1",[req.params.id]);need(token,404,'Token not found');return token;
+  const {rows:[token]}=await db.query("SELECT l.id,l.mint,l.source,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.metadata_uri,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND l.id=$1",[req.params.id]);need(token,404,'Token not found');const {metadata_uri,...publicToken}=token;return {...publicToken,socials:token.source==='platform'?await tokenSocials(config,metadata_uri):{website:null,telegram:null,twitter:null}};
  });
  app.get('/api/public/analytics' ,async()=>{
   const {rows:[fees]}=await db.query('SELECT COALESCE(sum(gross),0)::text AS collected,COALESCE(sum(recipient),0)::text AS recipients,COALESCE(sum(project),0)::text AS project FROM fee_events');
