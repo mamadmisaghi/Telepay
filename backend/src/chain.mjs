@@ -6,6 +6,7 @@ import {NATIVE_MINT,TOKEN_PROGRAM_ID,TOKEN_2022_PROGRAM_ID,getAssociatedTokenAdd
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {need} from './errors.mjs';
+import {decrypt} from './crypto.mjs';
 
 export function readKey(value) {
  const bytes=value.startsWith('[')?Uint8Array.from(JSON.parse(value)):bs58.decode(value);
@@ -37,11 +38,16 @@ export function chainService(config) {
  }
  return {
   connection,sdk,checkNetwork,
-  async prepareLaunch({mint,creator,wallet,name,symbol,uri,initialBuy}) {
+  async prepareLaunch({mint,creator,wallet,name,symbol,uri,initialBuy,encryptedMintSecret}) {
    const args={mint:new PublicKey(mint),creator:new PublicKey(creator),user:new PublicKey(wallet),name,symbol,uri,mayhemMode:false,holderReward:false};
    // Creation and optional buy are separate wallet approvals to stay under Solana's 1232-byte limit.
    const instructions=[await PUMP_SDK.createV2Instruction(args)];
-   const prepared=await build(instructions,args.user);
+   // Preserve the exact server-prepared message through external wallets. The mint
+   // co-signature is present before Phantom signs, so the wallet cannot rewrite
+   // the transaction without invalidating it. The payer still must approve/sign.
+   const mintSigner=encryptedMintSecret?Keypair.fromSecretKey(decrypt(encryptedMintSecret,config.encryptionKey,`mint:${mint}`)):null;
+   need(!mintSigner||mintSigner.publicKey.equals(args.mint),500,'Mint signer mismatch');
+   const prepared=await build(instructions,args.user,mintSigner?[mintSigner]:[]);
    const simulation=await connection.simulateTransaction(prepared.tx,{sigVerify:false,commitment:'confirmed'});
    need(!simulation.value.err,422,'Launch simulation failed. Check your wallet balance and try again');
    const fee=await connection.getFeeForMessage(prepared.tx.message,'confirmed');

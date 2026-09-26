@@ -11,6 +11,11 @@ const url=z.string().max(200).refine(v=>!v||/^https:\/\/[^\s]+$/.test(v),'Use an
 const schema=z.object({name:z.string().trim().min(2).max(32),symbol:z.string().regex(/^[A-Z0-9]{2,10}$/),description:z.string().max(1000).default(''),recipient:z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{3,31}$/),wallet:z.string().min(32).max(44),image:z.string().max(2800000),initialBuyLamports:z.string().regex(/^\d{1,12}$/).default('0'),website:url,telegram:url,twitter:url});
 const publicLaunch=r=>({id:r.id,mint:r.mint,name:r.name,symbol:r.symbol,status:r.status,recipientHandle:r.recipient_handle,signature:r.signature,transaction:r.transaction_base64,lastValidHeight:r.last_valid_height,initialBuyLamports:r.initial_buy,image:r.image_uri});
 export function launchRoutes(app,{db,config,chain,resolveRecipient}){
+ const prepareCreation=async(row,client=db)=>{
+  const {rows:[mint]}=await client.query('SELECT secret_encrypted FROM mint_pool WHERE address=$1',[row.mint]);
+  need(mint?.secret_encrypted,503,'Mint signer is unavailable');
+  return chain.prepareLaunch({mint:row.mint,creator:row.creator,wallet:row.wallet,name:row.name,symbol:row.symbol,uri:row.metadata_uri,initialBuy:0n,encryptedMintSecret:mint.secret_encrypted});
+ };
  app.post('/api/launches/prepare',async req=>{
   need(config.launchesEnabled,503,'Token launches are not enabled yet');need(config.encryptionKey&&config.rpcUrl,503,'Launch service is awaiting server configuration');
   const input=schema.parse(req.body),key=req.headers['idempotency-key'];need(typeof key==='string'&&key.length>=16&&key.length<=100,400,'A unique request key is required');
@@ -24,7 +29,7 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
    const {rows:[row]}=await tx.query('INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,initial_buy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *',[id,key,req.session.user_id,input.recipient.toLowerCase(),input.wallet,mint.address,creator.publicKey.toBase58(),encrypt(creator.secretKey,config.encryptionKey,`creator:${id}`),input.name,input.symbol,input.description,metadata.uri,metadata.image,input.initialBuyLamports]);return row;
   });
   try{
-   const prepared=await chain.prepareLaunch({mint:launch.mint,creator:launch.creator,wallet:launch.wallet,name:launch.name,symbol:launch.symbol,uri:launch.metadata_uri,initialBuy:BigInt(launch.initial_buy)});
+   const prepared=await prepareCreation(launch);
    const {rows:[row]}=await db.query("UPDATE launches SET status='prepared',message_base64=$2,transaction_base64=$3,last_valid_height=$4 WHERE id=$1 RETURNING *",[id,prepared.message,prepared.wire,prepared.lastValidHeight]);
    return {...publicLaunch(row),networkFeeLamports:prepared.networkFeeLamports};
   }catch(error){await db.query("UPDATE launches SET status='failed',error='Preparation failed; mint quarantined' WHERE id=$1",[id]);await db.query("UPDATE mint_pool SET status='quarantined' WHERE address=$1",[launch.mint]);throw error;}
@@ -53,7 +58,7 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
    // A submitted signature must be reconciled before any new transaction is prepared.
    need(['prepared','expired','failed'].includes(row.status),409,'Wait for the existing transaction to finish');
    if(row.signature){const status=await chain.status(row.signature,row.last_valid_height);need(['failed','expired'].includes(status.state),409,'Existing launch is still pending');}
-   const p=await chain.prepareLaunch({mint:row.mint,creator:row.creator,wallet:row.wallet,name:row.name,symbol:row.symbol,uri:row.metadata_uri,initialBuy:0n});
+   const p=await prepareCreation(row,tx);
    const {rows:[updated]}=await tx.query("UPDATE launches SET status='prepared',message_base64=$2,transaction_base64=$3,last_valid_height=$4,signature=NULL,error=NULL WHERE id=$1 RETURNING *",[row.id,p.message,p.wire,p.lastValidHeight]);
    await tx.query("UPDATE mint_pool SET status='reserved' WHERE address=$1",[row.mint]);return publicLaunch(updated);
   });

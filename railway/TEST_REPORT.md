@@ -50,3 +50,23 @@ URL: https://telepaid-production.up.railway.app
    remain explicitly illustrative; they must not be interpreted as live earnings.
 
 Local automated tests are not evidence that a mainnet launch or payout occurred.
+
+## Phantom creation fix — 2026-09-26
+
+- User-reported creation with zero initial buy reached Phantom approval, then
+  returned "The transaction was changed. Review and prepare again". Railway
+  recorded HTTP 400 from submit, before the application's on-chain broadcast.
+- Previously the mint signature was added only after wallet approval. Creation
+  and refresh now include the mint co-signature before handing the transaction
+  to the wallet, binding the exact prepared message while leaving the payer's
+  signature empty. Exact-message and wallet-signature checks remain enforced.
+- Phantom documents transaction augmentation; the exact changed instruction in
+  this incident was not captured, so this is a compatibility fix rather than a
+  claim that a particular augmentation was observed.
+- All 22 backend tests passed. Regression coverage verifies the mint signature,
+  absent payer signature, successful unchanged wallet signing, rejection of
+  changed messages and mismatched mint keys, and signer forwarding on prepare
+  and refresh. No real SOL was spent in these tests.
+- Existing prepared launches must use "Refresh this launch transaction" to get
+  the co-signed payload. A real Phantom retry remains necessary to confirm the
+  complete wallet-extension flow. No UI, mock data or financial flags changed.

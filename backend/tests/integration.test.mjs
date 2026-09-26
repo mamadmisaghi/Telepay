@@ -127,11 +127,12 @@ test('launch preparation reserves a TeLe mint and stores an arbitrary recipient 
  const f=await fixture();const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
  const dir=await mkdtemp(join(tmpdir(),'telepaid-meta-'));f.config.metadataDir=dir;f.config.launchesEnabled=true;f.config.rpcUrl='http://test.invalid';
  const address='A'.repeat(40)+'TeLe';await f.db.query('INSERT INTO mint_pool(address,secret_encrypted,suffix) VALUES($1,$2,$3)',[address,'encrypted-test-only','TeLe']);
- let calls=0;const chain={prepareLaunch:async args=>{calls++;assert.equal(args.mint,address);return {message:'message',wire:'wire',lastValidHeight:100,networkFeeLamports:'5000'};}};
+ let calls=0;const chain={prepareLaunch:async args=>{calls++;assert.equal(args.mint,address);assert.equal(args.encryptedMintSecret,'encrypted-test-only');return {message:'message',wire:'wire',lastValidHeight:100,networkFeeLamports:'5000'};}};
  const app=await buildApp({...f,chain});try{
   const request={method:'POST',url:'/api/launches/prepare',headers:{cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2','idempotency-key':'launch-replay-test-1'},payload:{name:'Hamoon coin',symbol:'HAM',recipient:'SomeoneElse',wallet:f.wallet.publicKey.toBase58(),image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aEZkAAAAASUVORK5CYII=',initialBuyLamports:'0'}};
   const result=await app.inject(request);assert.equal(result.statusCode,200,result.body);assert.equal(result.json().recipientHandle,'someoneelse');assert.equal(result.json().mint,address);
   assert.equal((await app.inject(request)).json().id,result.json().id);assert.equal(calls,1);
+  const refresh=await app.inject({method:'POST',url:`/api/launches/${result.json().id}/refresh`,headers:request.headers,payload:{}});assert.equal(refresh.statusCode,200,refresh.body);assert.equal(refresh.json().mint,address);assert.equal(calls,2);
   const {rows:[pool]}=await f.db.query('SELECT status FROM mint_pool WHERE address=$1',[address]);assert.equal(pool.status,'reserved');
   const users=await f.db.query("SELECT id FROM users WHERE username='someoneelse'");assert.equal(users.rowCount,0);
  }finally{await app.close();await f.db.close();await rm(dir,{recursive:true,force:true});}
@@ -268,4 +269,28 @@ test('initial buy signs separately, persists once and reconciles through the wor
   await workerTick({...f,chain});
   const row=(await app.inject({url:'/api/launches/launch1',headers})).json();assert.equal(row.status,'confirmed');assert.equal(row.buy.status,'confirmed');
  }finally{await app.close();await f.db.close();}
+});
+
+test('creation is mint co-signed before wallet approval and keeps exact-message tamper protection',async()=>{
+ const {chainService}=await import('../src/chain.mjs');
+ const mint=Keypair.generate(),payer=Keypair.generate(),creator=Keypair.generate();
+ const encryptionKey=Buffer.alloc(32,9).toString('base64');
+ const chain=chainService(configFromEnv({SOLANA_RPC_URL:'https://unused.invalid',KEY_ENCRYPTION_KEY:encryptionKey}));
+ chain.connection.getGenesisHash=async()=> '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+ chain.connection.getLatestBlockhash=async()=>({blockhash:Keypair.generate().publicKey.toBase58(),lastValidBlockHeight:200});
+ chain.connection.simulateTransaction=async()=>({value:{err:null,unitsConsumed:120000}});
+ chain.connection.getFeeForMessage=async()=>({value:10000});
+ const args={mint:mint.publicKey.toBase58(),creator:creator.publicKey.toBase58(),wallet:payer.publicKey.toBase58(),name:'Test',symbol:'TEST',uri:'https://example.test/meta.json',initialBuy:0n,encryptedMintSecret:encrypt(mint.secretKey,encryptionKey,`mint:${mint.publicKey.toBase58()}`)};
+ for(let attempt=0;attempt<2;attempt++){
+  const prepared=await chain.prepareLaunch(args),tx=VersionedTransaction.deserialize(Buffer.from(prepared.wire,'base64'));
+  const index=tx.message.staticAccountKeys.findIndex(k=>k.equals(mint.publicKey));
+  assert.ok(nacl.sign.detached.verify(tx.message.serialize(),tx.signatures[index],mint.publicKey.toBytes()));
+  assert.ok(tx.signatures[0].every(b=>b===0),'payer has not signed; this cannot be broadcast successfully');
+  tx.sign([payer]);assert.doesNotThrow(()=>signedMatches(Buffer.from(tx.serialize()).toString('base64'),prepared.message,args.wallet));
+  // A changed blockhash invalidates the mint signature and is still rejected,
+  // even when the payer has signed the altered transaction.
+  tx.message.recentBlockhash=Keypair.generate().publicKey.toBase58();tx.sign([payer]);
+  assert.throws(()=>signedMatches(Buffer.from(tx.serialize()).toString('base64'),prepared.message,args.wallet),/transaction was changed/);
+ }
+ await assert.rejects(chain.prepareLaunch({...args,encryptedMintSecret:encrypt(creator.secretKey,encryptionKey,`mint:${args.mint}`)}),/Mint signer mismatch/);
 });
