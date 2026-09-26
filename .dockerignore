@@ -9,3 +9,6 @@ backend/data
 .wrangler
 dist
 vps-dist
+railway-dist
+.dev.vars*
+deploy/credentials.enc.json

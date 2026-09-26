@@ -12,6 +12,8 @@ export function configFromEnv(env = process.env) {
   return {
     origin, production: env.NODE_ENV === 'production', port: Number(env.PORT || 3001),
     privyAppId: env.PRIVY_APP_ID || '',
+    uiMode: env.UI_MODE === 'preview' ? 'preview' : 'live',
+    staticDir: env.STATIC_DIR || '',
     databaseUrl: secret(env, 'DATABASE_URL'), encryptionKey: secret(env, 'KEY_ENCRYPTION_KEY'),
     telegramClientId: env.TELEGRAM_CLIENT_ID || '', telegramClientSecret: secret(env, 'TELEGRAM_CLIENT_SECRET'),
     rpcUrl: secret(env, 'SOLANA_RPC_URL'), cluster: env.SOLANA_CLUSTER || 'mainnet-beta', suffix,
@@ -26,5 +28,5 @@ export function readiness(c) {
   return {telegram: !!(c.telegramClientId && c.telegramClientSecret), wallet: !!c.privyAppId, privyAppId:c.privyAppId,
     launch: !!(c.launchesEnabled && c.suffix && c.rpcUrl && c.encryptionKey),
     claims: !!(c.payoutsEnabled && c.rpcUrl && c.treasurySecret && c.operatorSecret),
-    suffix: c.suffix || null, mode: 'live', cluster: c.cluster};
+    suffix: c.suffix || null, mode: c.uiMode || 'live', cluster: c.cluster};
 }

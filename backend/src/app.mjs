@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import helmet from '@fastify/helmet';
+import fastifyStatic from '@fastify/static';
 import {authRoutes,sessionFor} from './auth.mjs';
 import {launchRoutes} from './launches.mjs';
 import {metadataRoutes} from './metadata.mjs';
@@ -20,6 +21,8 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
   reply.code(status).send({error:status>=500?'Service is not ready. Please try again shortly.':err.name==='ZodError'?'Check the token details and try again.':err.message});
  });
  app.addHook('onRequest',async(req,reply)=>{
+  // Public static files never bypass authentication for /api routes.
+  if(config.staticDir&&!req.url.split('?')[0].startsWith('/api/')&&['GET','HEAD'].includes(req.method))return;
   if(!req.url.startsWith('/api/metadata/'))reply.header('Cache-Control','no-store');
   const path=req.url.split('?')[0];
   const publicGet=req.method==='GET'&&(path==='/api/health'||path==='/api/runtime'||path==='/api/session'||path.startsWith('/api/auth/telegram')||path.startsWith('/api/public/')||path.startsWith('/api/metadata/'));
@@ -60,5 +63,6 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
   need(typeof amount==='string'&&/^\d{1,20}$/.test(amount)&&typeof wallet==='string',400,'Invalid claim');need(typeof key==='string'&&key.length>=16&&key.length<=100,400,'A unique request key is required');
   return reserveClaim(db,{userId:req.session.user_id,handle:req.session.username,wallet,amount:BigInt(amount),idempotencyKey:key,minimum:config.minimumClaim,sessionHash:req.session.token_hash});
  });
+ if(config.staticDir)await app.register(fastifyStatic,{root:config.staticDir,dotfiles:'deny',index:['index.html'],maxAge:'1h',setHeaders(res,path){if(path.endsWith('/index.html'))res.header('Cache-Control','no-cache');}});
  return app;
 }

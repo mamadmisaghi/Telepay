@@ -17,6 +17,7 @@
     "@fastify/cookie": "11.1.2",
     "@fastify/helmet": "13.1.1",
     "@fastify/rate-limit": "11.2.0",
+    "@fastify/static": "10.1.5",
     "@pump-fun/pump-sdk": "2.0.0",
     "@pump-fun/pump-swap-sdk": "1.20.0",
     "@solana/spl-token": "0.4.15",

@@ -48,6 +48,7 @@ next-env.d.ts
 **/node_modules/
 /backend/data/
 /vps-dist/
+/railway-dist/
 /deploy/secrets/
 /backend/coverage/
 /deploy/runtime.env
