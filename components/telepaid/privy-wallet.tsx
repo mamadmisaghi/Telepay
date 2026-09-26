@@ -5,15 +5,19 @@ import {toSolanaWalletConnectors,useWallets,useSignMessage,useSignTransaction} f
 import {WalletContext} from './wallet-context';
 
 const connectors=toSolanaWalletConnectors({shouldAutoConnect:true});
+const disconnectedKey='telepaid:wallet-disconnected';
 function Bridge({children,cluster}:{children:ReactNode;cluster:string}){
  const {ready}=usePrivy(),{wallets,ready:walletsReady}=useWallets();
  const [error,setError]=useState(''),[selected,setSelected]=useState('');
- const {connectWallet}=useConnectWallet({onSuccess:({wallet})=>{setSelected(wallet.address);setError('')},onError:()=>setError('Wallet connection was cancelled or could not complete. Please try again.')});
+ const [disconnected,setDisconnected]=useState(()=>{try{return localStorage.getItem(disconnectedKey)==='1'}catch{return false}});
+ const {connectWallet}=useConnectWallet({onSuccess:({wallet})=>{try{localStorage.removeItem(disconnectedKey)}catch{}setDisconnected(false);setSelected(wallet.address);setError('')},onError:()=>setError('Wallet connection was cancelled or could not complete. Please try again.')});
  const {signMessage}=useSignMessage(),{signTransaction}=useSignTransaction();
- const wallet=wallets.find(w=>w.address===selected)||wallets[0];
+ // Some external wallets cannot be disconnected programmatically. Keep an explicit
+ // app-level disconnect across reloads instead of picking wallets[0] again.
+ const wallet=disconnected?undefined:wallets.find(w=>w.address===selected)||(!disconnected?wallets[0]:undefined);
  return <WalletContext.Provider value={{ready:ready&&walletsReady,address:wallet?.address||'',error,
   connect:()=>{setError('');connectWallet({walletChainType:'solana-only'})},
-  disconnect:async()=>{await wallet?.disconnect();setSelected('');setError('')},
+  disconnect:async()=>{setDisconnected(true);try{localStorage.setItem(disconnectedKey,'1')}catch{}setSelected('');setError('');try{await wallet?.disconnect()}catch{/* The app is already disconnected even if the wallet provider cannot disconnect. */}},
   signMessage:async message=>{if(!wallet)throw new Error('Connect a Solana wallet first.');return (await signMessage({wallet,message})).signature},
   signTransaction:async transaction=>{if(!wallet)throw new Error('Connect a Solana wallet first.');return (await signTransaction({wallet,transaction,chain:cluster==='devnet'?'solana:devnet':'solana:mainnet'})).signedTransaction}
  }}>{children}</WalletContext.Provider>;

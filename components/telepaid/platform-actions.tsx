@@ -5,7 +5,7 @@ import {fromPublicToken,type Token,type PublicToken} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
 
 type Runtime={integrated?:boolean;telegram:boolean;telegramBotUsername?:string;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
-type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{available:string;reserved:string;settled:string}};
+type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{earned:string;available:string;reserved:string;settled:string}};
 type Claim={id:string;status:string;signature?:string};
 export type Launch={id:string;mint:string;name:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;launchFormat?:string;buy?:{status:string;transaction:string;signature?:string}};
 export async function request<T=any>(path:string,body?:unknown,headers:Record<string,string>={}){
@@ -123,7 +123,7 @@ export function ClaimAccount({onVerify}:{onVerify:(claimAfterVerification?:boole
  const available=session.balance?.available||'0';
  async function submit(){const result=await submitAvailableClaim(wallet.address,session.user!.username,runtime!.minimumClaimLamports,key.current);setClaim(result);await refresh();}
  function claimNow(){if(!wallet.address){wallet.connect();return;}if(!session.wallets?.includes(wallet.address)||!freshClaimProof(session)||proofExpired){onVerify(true);return;}void run(submit);}
- return <section className="claim-balance" aria-label="Your creator fees"><dl className="claim-balances"><div><dt>Available to claim</dt><dd>{asSOL(available)} <span>SOL</span></dd></div><div><dt>Withdrawn</dt><dd>{asSOL(session.balance?.settled)} <span>SOL</span></dd></div><div><dt>Pending withdrawal</dt><dd>{asSOL(session.balance?.reserved)} <span>SOL</span></dd></div></dl><div className="claim-controls">
+ return <section className="claim-balance" aria-label="Your creator fees"><dl className="claim-balances fee-summary"><div><dt>Available to claim</dt><dd>{asSOL(available)} <span>SOL</span></dd></div><div><dt>Total fees earned</dt><dd>{asSOL(session.balance?.earned)} <span>SOL</span></dd></div><div><dt>Claimed</dt><dd>{asSOL(session.balance?.settled)} <span>SOL</span></dd></div><div><dt>Pending claim</dt><dd>{asSOL(session.balance?.reserved)} <span>SOL</span></dd></div></dl><div className="claim-controls">
  <button className="btn white" disabled={busy||!runtime.claims||BigInt(available)<BigInt(runtime.minimumClaimLamports)||!!claim&&['queued','submitted'].includes(claim.status)} onClick={claimNow}>{busy?'Submitting…':claim&&['queued','submitted'].includes(claim.status)?'Claim submitted':'Claim to connected wallet'}</button>
  </div>{!runtime.claims?<p className="field-help">Payouts are currently paused. Your verified account and assigned tokens are shown below.</p>:BigInt(available)<BigInt(runtime.minimumClaimLamports)&&<p className="field-help">Minimum claim: {asSOL(runtime.minimumClaimLamports)} SOL. Only finalized, collected fees count toward your balance.</p>}{claim&&<p role="status">Claim {claim.status} <TransactionLink signature={claim.signature} cluster={runtime.cluster}/></p>}{error&&<p className="form-error" role="alert">{error}</p>}</section>;
 }
