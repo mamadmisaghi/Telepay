@@ -1,11 +1,12 @@
 import {Connection,Keypair,PublicKey,TransactionMessage,VersionedTransaction,SystemProgram,ComputeBudgetProgram} from '@solana/web3.js';
-import {PUMP_SDK,OnlinePumpSdk,getBuyTokenAmountFromSolAmount,creatorVaultPda} from '@pump-fun/pump-sdk';
+import {PUMP_SDK,OnlinePumpSdk,getBuyTokenAmountFromSolAmount,creatorVaultPda,feeSharingConfigPda,canonicalPumpPoolPda} from '@pump-fun/pump-sdk';
 import BN from 'bn.js';
 import {coinCreatorVaultAtaPda,coinCreatorVaultAuthorityPda} from '@pump-fun/pump-swap-sdk';
 import {NATIVE_MINT,TOKEN_PROGRAM_ID,TOKEN_2022_PROGRAM_ID,getAssociatedTokenAddressSync,createCloseAccountInstruction} from '@solana/spl-token';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {need} from './errors.mjs';
+import {sharingLaunchInstructions,assertSharing,sharingReceipt} from './fee-sharing.mjs';
 import {decrypt} from './crypto.mjs';
 
 export function readKey(value) {
@@ -29,9 +30,9 @@ export function chainService(config) {
   const expected={'mainnet-beta':'5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d','devnet':'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG'}[config.cluster];
   need(expected&&genesis===expected,503,'RPC network does not match the configured network');checked=true;
  }
- async function build(instructions,payer,signers=[],compact=false) {
+ async function build(instructions,payer,signers=[],compact=false,lookupTables=[]) {
   await checkNetwork();const latest=await connection.getLatestBlockhash('confirmed');
-  const tx=new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:latest.blockhash,instructions:compact?instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:400000}),...instructions]}).compileToV0Message());
+  const tx=new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:latest.blockhash,instructions:compact?instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:600000}),...instructions]}).compileToV0Message(lookupTables));
   if(signers.length)tx.sign(signers);
   let size;try{size=tx.serialize().length;}catch{need(false,422,'Launch transaction is too large. Shorten the token name and retry');}
   need(size<=1232,422,'Launch transaction is too large. Shorten the token name and retry');
@@ -39,7 +40,7 @@ export function chainService(config) {
  }
  return {
   connection,sdk,checkNetwork,
-  async prepareLaunch({mint,creator,wallet,name,symbol,uri,initialBuy,encryptedMintSecret}) {
+  async prepareLaunch({mint,creator,wallet,name,symbol,uri,initialBuy,encryptedMintSecret,feeTreasury}) {
    const args={mint:new PublicKey(mint),creator:new PublicKey(creator),user:new PublicKey(wallet),name,symbol,uri,mayhemMode:false,holderReward:false};
    await checkNetwork();
    need(Buffer.byteLength(name,'utf8')<=32,400,'Token name must fit within 32 UTF-8 bytes');
@@ -50,16 +51,17 @@ export function chainService(config) {
     // Null state marks a new curve and includes the creator fee in the quote.
     const amount=getBuyTokenAmountFromSolAmount({global,feeConfig,mintSupply:null,bondingCurve:null,amount:solAmount,quoteMint:PublicKey.default});
     need(amount.gtn(0),400,'Initial buy is too small');
-    instructions=await PUMP_SDK.createV2AndBuyInstructions({...args,global,solAmount,amount});
-   }else instructions=[await PUMP_SDK.createV2Instruction(args)];
+    instructions=feeTreasury?await sharingLaunchInstructions(args,feeTreasury,global,amount,solAmount):await PUMP_SDK.createV2AndBuyInstructions({...args,global,solAmount,amount});
+   }else instructions=feeTreasury?await sharingLaunchInstructions(args,feeTreasury):[await PUMP_SDK.createV2Instruction(args)];
    // Preserve the exact server-prepared message through external wallets. The mint
    // co-signature is present before Phantom signs, so the wallet cannot rewrite
    // the transaction without invalidating it. The payer still must approve/sign.
    const mintSigner=encryptedMintSecret?Keypair.fromSecretKey(decrypt(encryptedMintSecret,config.encryptionKey,`mint:${mint}`)):null;
    need(!mintSigner||mintSigner.publicKey.equals(args.mint),500,'Mint signer mismatch');
-   const prepared=await build(instructions,args.user,mintSigner?[mintSigner]:[],initialBuy>0n);
+   const tables=[];if(feeTreasury){for(const address of config.launchLookupTables||[]){const {value}=await connection.getAddressLookupTable(new PublicKey(address));if(value?.isActive())tables.push(value);}need(tables.length,503,'Launch address lookup tables are unavailable');}
+   const prepared=await build(instructions,args.user,mintSigner?[mintSigner]:[],!feeTreasury&&initialBuy>0n,tables);
    const simulation=await connection.simulateTransaction(prepared.tx,{sigVerify:false,commitment:'confirmed'});
-   need(!simulation.value.err,422,'Launch simulation failed. Check your wallet balance and try again');
+   need(!simulation.value.err,422,'Launch simulation failed. Check your SOL balance for the buy, account rent and network fee, then retry');
    const fee=await connection.getFeeForMessage(prepared.tx.message,'confirmed');
    return {...prepared,networkFeeLamports:String(fee.value??0),simulationUnits:simulation.value.unitsConsumed??null};
   },
@@ -72,6 +74,20 @@ export function chainService(config) {
    const prepared=await build(instructions,user);
    const simulation=await connection.simulateTransaction(prepared.tx,{sigVerify:false,commitment:'confirmed'});
    need(!simulation.value.err,422,'Initial buy simulation failed. Check your SOL balance and try again');return prepared;
+  },
+  async verifySharing(mint,treasury){
+   const address=feeSharingConfigPda(new PublicKey(mint)),info=await connection.getAccountInfo(address,'finalized');
+   need(info,409,'Fee sharing configuration is missing');const state=PUMP_SDK.decodeSharingConfig(info);assertSharing(state,mint,treasury);
+   await this.verifyMint(mint,address.toBase58());return state;
+  },
+  async sharingCollection(mint,treasury,operator){
+   await checkNetwork();const state=await this.verifySharing(mint,treasury),key=new PublicKey(mint),address=feeSharingConfigPda(key),instructions=[];
+   if(await connection.getAccountInfo(canonicalPumpPoolPda(key)))instructions.push(await PUMP_SDK.transferCreatorFeesToPumpV2({payer:operator.publicKey,mint:key,quoteMint:NATIVE_MINT,quoteTokenProgram:TOKEN_PROGRAM_ID}));
+   instructions.push(await PUMP_SDK.distributeCreatorFeesV2({mint:key,sharingConfig:state,sharingConfigAddress:address,quoteMint:NATIVE_MINT,payer:operator.publicKey,shouldInitializeAta:true,quoteTokenProgram:TOKEN_PROGRAM_ID}));
+   return build(instructions,operator.publicKey,[operator]);
+  },
+  async sharingReceived(signature,mint,treasury){
+   const tx=await connection.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:1});need(tx,503,'Finalized fee receipt is unavailable');return {lamports:sharingReceipt(tx,mint,treasury),slot:tx.slot};
   },
   async collection(creator,operator){
    await checkNetwork();const instructions=await sdk.collectCoinCreatorFeeInstructions(creator.publicKey,operator.publicKey);
@@ -93,7 +109,7 @@ export function chainService(config) {
   },
   async verifyMint(mint,creator){const curve=await sdk.fetchBondingCurve(new PublicKey(mint));need(curve.creator.toBase58()===creator,409,'On-chain fee recipient does not match the launch');return curve;},
   async collectedFees(signature,creator){
-   const tx=await connection.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:0});
+   const tx=await connection.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:1});
    need(tx&&!tx.meta?.err,503,'Finalized collection is not available');
    const keys=tx.transaction.message.getAccountKeys({accountKeysFromLookups:tx.meta.loadedAddresses});
    const native=creatorVaultPda(new PublicKey(creator)).toBase58();
@@ -106,7 +122,7 @@ export function chainService(config) {
    return {lamports:gross,slot:tx.slot};
   },
   async receivedBy(signature,address){
-   const tx=await connection.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:0});
+   const tx=await connection.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:1});
    need(tx&&!tx.meta?.err,503,'Finalized transaction is not available yet');
    const keys=tx.transaction.message.getAccountKeys({accountKeysFromLookups:tx.meta.loadedAddresses});
    let index=-1;for(let i=0;i<keys.length;i++)if(keys.get(i)?.toBase58()===address)index=i;

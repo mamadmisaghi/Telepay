@@ -18,6 +18,8 @@ export function configFromEnv(env = process.env) {
     telegramClientId: env.TELEGRAM_CLIENT_ID || '', telegramClientSecret: secret(env, 'TELEGRAM_CLIENT_SECRET'),
     telegramBotToken: secret(env,'TELEGRAM_BOT_TOKEN'), telegramBotUsername: env.TELEGRAM_BOT_USERNAME || 'TelePayFunBot', telegramWebhookSecret: secret(env,'TELEGRAM_WEBHOOK_SECRET'),
     rpcUrl: secret(env, 'SOLANA_RPC_URL'), cluster: env.SOLANA_CLUSTER || 'mainnet-beta', suffix,
+    feeSharingEnabled:env.FEE_SHARING_ENABLED==='true',launchLookupTables:(env.LAUNCH_LOOKUP_TABLES||'').split(',').filter(Boolean),
+    telegramApiId:Number(env.TELEGRAM_API_ID||0),telegramApiHash:secret(env,'TELEGRAM_API_HASH'),telegramSearchSession:secret(env,'TELEGRAM_SEARCH_SESSION'),
     treasurySecret: secret(env, 'TREASURY_KEYPAIR'), operatorSecret: secret(env, 'OPERATOR_KEYPAIR'),
     launchesEnabled: env.LAUNCHES_ENABLED === 'true', payoutsEnabled: env.PAYOUTS_ENABLED === 'true', collectionsEnabled: env.COLLECTIONS_ENABLED === 'true',
     metadataDir: env.METADATA_DIR || './data/metadata', vanityTarget: Number(env.VANITY_POOL_TARGET || 20),

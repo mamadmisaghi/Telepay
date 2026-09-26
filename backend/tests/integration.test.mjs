@@ -16,6 +16,7 @@ async function fixture(){
  const pg=new PGlite();await pg.exec(await readFile(new URL('../migrations/001_core.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/002_bot_and_buys.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/003_atomic_market.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/004_sharing_analytics.sql',import.meta.url),'utf8'));
  const adapt=client=>({query:async(sql,args)=>{if(sql.startsWith('SELECT pg_'))return {rows:[],rowCount:1};const r=await client.query(sql,args);return {...r,rowCount:Math.max(r.affectedRows||0,r.rows.length)};}});
  const db={...adapt(pg),transaction:fn=>pg.transaction(tx=>fn(adapt(tx))),close:()=>pg.close()};
  const config=configFromEnv({PUBLIC_ORIGIN:'http://localhost:8080',TELEGRAM_CLIENT_ID:'123',TELEGRAM_CLIENT_SECRET:'test-secret',PAYOUTS_ENABLED:'true',KEY_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')});
@@ -376,4 +377,42 @@ test('recipient directory opt-in reveals a real profile without granting authent
   assert.equal((await f.db.query("SELECT * FROM users WHERE id='123'")).rowCount,0);assert.equal((await f.db.query("SELECT * FROM sessions WHERE user_id='123'")).rowCount,0);
   await app.inject({method:'POST',url:'/api/telegram/webhook',headers,payload:{message:{...update.message,text:'/remove'}}});assert.equal((await f.db.query('SELECT * FROM telegram_directory')).rowCount,0);
  }finally{await app.close();await f.db.close();}
+});
+
+test('sharing receipts require the official program, correct mint, and 100% treasury allocation',async()=>{
+ const {sharingReceipt,assertSharing}=await import('../src/fee-sharing.mjs');
+ const {PUMP_PROGRAM_ID,feeSharingConfigPda}=await import('@pump-fun/pump-sdk');const {createHash}=await import('node:crypto');
+ const mint=Keypair.generate().publicKey,treasury=Keypair.generate().publicKey;
+ const state={mint,adminRevoked:true,shareholders:[{address:treasury,shareBps:10000}]};assertSharing(state,mint.toBase58(),treasury.toBase58());
+ assert.throws(()=>assertSharing({...state,adminRevoked:false},mint.toBase58(),treasury.toBase58()),/locked/);
+ assert.throws(()=>assertSharing({...state,shareholders:[{address:treasury,shareBps:8000}]},mint.toBase58(),treasury.toBase58()),/locked/);
+ const encoded=createHash('sha256').update('event:DistributeCreatorFeesEvent').digest().subarray(0,8).toString('base64');
+ const event={...state,sharingConfig:feeSharingConfigPda(mint),distributed:10001n};const decoder={decodeDistributeCreatorFeesEvent:()=>event};
+ const tx={meta:{err:null,logMessages:[`Program ${PUMP_PROGRAM_ID} invoke [1]`,`Program data: ${encoded}`,`Program ${PUMP_PROGRAM_ID} success`]}};
+ assert.equal(sharingReceipt(tx,mint.toBase58(),treasury.toBase58(),decoder),10001n);
+ tx.meta.logMessages[0]=`Program ${Keypair.generate().publicKey} invoke [1]`;assert.equal(sharingReceipt(tx,mint.toBase58(),treasury.toBase58(),decoder),0n);
+});
+
+test('durable indexing resumes failed pages and catches up without skipping signatures',async()=>{
+ const f=await fixture();try{
+ const {indexAddress}=await import('../src/indexer.mjs');const address=Keypair.generate().publicKey;const calls=[],processed=[];let fail=true;
+ const connection={getSignaturesForAddress:async(_a,opts)=>{calls.push(opts);return opts.before?[{signature:'old'}]:opts.until?[]:[{signature:'new'},{signature:'middle'}];}};
+ const args={db:f.db,connection,launchId:'launch1',address,kind:'check',limit:2,process:async s=>{if(s.signature==='middle'&&fail)throw new Error('RPC retry');processed.push(s.signature)}};
+ await assert.rejects(indexAddress(args),/RPC retry/);assert.equal((await f.db.query('SELECT before_signature FROM index_cursors')).rows[0].before_signature,null);
+ fail=false;assert.equal((await indexAddress(args)).complete,false);assert.equal((await indexAddress(args)).complete,true);assert.equal(calls.at(-1).before,'middle');
+ await indexAddress(args);assert.equal(calls.at(-1).until,'new');assert.ok(processed.includes('old'));
+ }finally{await f.db.close()}
+});
+
+test('USD candles use historical reference rates; missing rates do not invent dollar prices',async()=>{
+ const f=await fixture();try{
+ const {marketService}=await import('../src/market.mjs');const now=Math.floor(Date.now()/300000)*300;
+ await f.db.query("INSERT INTO market_state(launch_id,spot_price_sol,updated_at,backlog,sol_usd,sol_usd_at,supply) VALUES('launch1',0.002,now(),false,200,now(),1000)");
+ for(const [i,rate] of [[1,100],[2,150]]){
+ await f.db.query('INSERT INTO sol_usd_rates(minute,price) VALUES($1,$2)',[now-i*300,rate]);
+ await f.db.query("INSERT INTO market_trades VALUES('launch1',$1,0,$2,to_timestamp($3),'buy','wallet',1000000000,1000000000,0.001)",['tx'+i,i,now-i*300]);}
+ const service=marketService({db:f.db,chain:{},config:{production:true}}),r=await service.load({id:'launch1'},60);
+ assert.equal(r.spotPriceUsd,0.4);assert.equal(r.candles[0].close,0.15);assert.equal(r.candles[1].close,0.1);assert.equal(r.stats.volume24hUsd,250);assert.equal(r.stats.marketCapUsd,400);
+ await f.db.query('DELETE FROM sol_usd_rates WHERE minute=$1',[now-300]);const missing=await service.load({id:'launch1'},60);assert.equal(missing.candles.length,1);assert.equal(missing.stats.volume24hUsd,null);assert.equal(missing.trades[0].priceUsd,null);
+ }finally{await f.db.close()}
 });

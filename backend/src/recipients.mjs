@@ -1,3 +1,4 @@
+import {telegramSearch} from './telegram-search.mjs';
 import {need} from './errors.mjs';
 
 const validHandle=/^[a-z][a-z0-9_]{3,31}$/;
@@ -13,7 +14,7 @@ export function parsePublicProfile(html,handle){
 }
 export const normalizeRecipient=value=>String(value||'').trim().replace(/^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me)\//i,'').replace(/^@/,'').replace(/\/$/,'').toLowerCase();
 export function recipientRoutes(app,{db,config,fetcher=fetch}){
- const cache=new Map(),pending=new Map();
+ const cache=new Map(),pending=new Map(),remote=telegramSearch(config);app.addHook('onClose',()=>remote.close());
  async function bot(method,body){
   const r=await fetcher(`https://api.telegram.org/bot${config.telegramBotToken}/${method}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(5000)});
   const j=await r.json();if(!r.ok||!j.ok)return null;return j.result;
@@ -23,10 +24,10 @@ export function recipientRoutes(app,{db,config,fetcher=fetch}){
   const cached=cache.get(handle);if(cached&&cached.expires>Date.now())return cached.value;
   if(pending.has(handle))return pending.get(handle);
   const job=(async()=>{
-   let value=null;
+   let value=remote.enabled?await remote.exact(handle):null;
    // Existing IDs are only an API lookup hint. Always compare today's username;
    // they never become the fee beneficiary or prove future ownership.
-   if(config.telegramBotToken){
+   if(!value&&config.telegramBotToken){
     const {rows}=await db.query('SELECT id FROM telegram_directory WHERE handle=$1 UNION SELECT id FROM users WHERE lower(username)=$1 LIMIT 6',[handle]);
     for(const row of rows){if(!/^\d+$/.test(row.id))continue;
      try{const chat=await bot('getChat',{chat_id:row.id});if(chat?.type!=='private'||chat.username?.toLowerCase()!==handle)continue;
@@ -47,7 +48,9 @@ export function recipientRoutes(app,{db,config,fetcher=fetch}){
   const q=normalizeRecipient(req.query.q);need(/^[a-z][a-z0-9_]{2,31}$/.test(q),400,'Enter at least 3 username characters');
   const {rows}=await db.query("SELECT recipient_handle AS handle FROM launches WHERE status='confirmed' AND starts_with(recipient_handle,$1) UNION SELECT handle FROM telegram_directory WHERE starts_with(handle,$1) ORDER BY handle LIMIT 6",[q]);
   const handles=[...new Set([...(validHandle.test(q)?[q]:[]),...rows.map(r=>r.handle)])];
-  const result=await Promise.all(handles.map(handle=>find(handle,{refresh:req.query.refresh==='1'})));return {results:result.filter(r=>r.status==='found'),exactStatus:result.find(r=>r.handle===q)?.status||'incomplete',scope:'exact_and_opted_in_recipients'};
+  const suggestions=await remote.search(q);for(const value of suggestions)cache.set(value.handle,{value,expires:Date.now()+60000});
+  handles.push(...suggestions.map(r=>r.handle).filter(h=>!handles.includes(h)));
+  const result=await Promise.all(handles.map(handle=>find(handle,{refresh:req.query.refresh==='1'})));return {results:result.filter(r=>r.status==='found'),exactStatus:result.find(r=>r.handle===q)?.status||'incomplete',scope:remote.global?'telegram_search':remote.enabled?'telegram_exact':'exact_and_opted_in_recipients'};
  });
  return {find};
 }

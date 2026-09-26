@@ -1,0 +1,13 @@
+ALTER TABLE launches ADD COLUMN IF NOT EXISTS fee_mode text NOT NULL DEFAULT 'legacy';
+ALTER TABLE launches ADD COLUMN IF NOT EXISTS fee_treasury text;
+ALTER TABLE fee_events DROP CONSTRAINT IF EXISTS fee_events_signature_key;
+CREATE UNIQUE INDEX IF NOT EXISTS fee_events_mint_signature ON fee_events(launch_id,signature);
+CREATE TABLE IF NOT EXISTS sharing_scans (launch_id text NOT NULL REFERENCES launches(id), signature text NOT NULL, PRIMARY KEY(launch_id,signature));
+CREATE TABLE IF NOT EXISTS index_cursors (launch_id text NOT NULL REFERENCES launches(id), address text NOT NULL, kind text NOT NULL, head text, before_signature text, backfill_done boolean NOT NULL DEFAULT false, PRIMARY KEY(launch_id,address,kind));
+ALTER TABLE market_state ADD COLUMN IF NOT EXISTS holders integer;
+ALTER TABLE market_state ADD COLUMN IF NOT EXISTS holders_updated_at timestamptz;
+CREATE TABLE IF NOT EXISTS sol_usd_rates (minute bigint PRIMARY KEY, price double precision NOT NULL CHECK(price>0));
+ALTER TABLE index_cursors ADD COLUMN IF NOT EXISTS target_head text;
+ALTER TABLE market_state ADD COLUMN IF NOT EXISTS sol_usd double precision;
+ALTER TABLE market_state ADD COLUMN IF NOT EXISTS sol_usd_at timestamptz;
+ALTER TABLE market_state ADD COLUMN IF NOT EXISTS supply double precision;

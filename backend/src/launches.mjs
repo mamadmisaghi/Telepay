@@ -4,7 +4,9 @@ import bs58 from 'bs58';
 import {z} from 'zod';
 import {assertLaunchMint} from '../../lib/domain/launch-policy.ts';
 import {encrypt,decrypt} from './crypto.mjs';
-import {signedMatches} from './chain.mjs';
+import {feeSharingConfigPda} from '@pump-fun/pump-sdk';
+import {PublicKey} from '@solana/web3.js';
+import {readKey,signedMatches} from './chain.mjs';
 import {saveMetadata,compactMetadata} from './metadata.mjs';
 import {need} from './errors.mjs';
 const url=z.string().max(200).refine(v=>!v||/^https:\/\/[^\s]+$/.test(v),'Use an HTTPS URL').default('');
@@ -16,7 +18,7 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
   need(mint?.secret_encrypted,503,'Mint signer is unavailable');
   const uri=await compactMetadata(config,row.metadata_uri);
   await client.query('UPDATE launches SET metadata_uri=$2 WHERE id=$1',[row.id,uri]);
-  return chain.prepareLaunch({mint:row.mint,creator:row.creator,wallet:row.wallet,name:row.name,symbol:row.symbol,uri,initialBuy:BigInt(row.initial_buy),encryptedMintSecret:mint.secret_encrypted});
+  return chain.prepareLaunch({mint:row.mint,creator:row.creator,wallet:row.wallet,name:row.name,symbol:row.symbol,uri,initialBuy:BigInt(row.initial_buy),encryptedMintSecret:mint.secret_encrypted,feeTreasury:row.fee_treasury});
  };
  app.post('/api/launches/prepare',async req=>{
   need(config.launchesEnabled,503,'Token launches are not enabled yet');need(config.encryptionKey&&config.rpcUrl,503,'Launch service is awaiting server configuration');
@@ -28,10 +30,11 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
   const recipient=await resolveRecipient(input.recipient.toLowerCase());
   need(recipient?.status==='found',422,'Telegram profile could not be confirmed. Select a confirmed profile before launching');
   const metadata=await saveMetadata(config,input);const id=randomUUID(),creator=Keypair.generate();
+  const treasury=config.feeSharingEnabled?readKey(config.treasurySecret).publicKey.toBase58():null;
   const launch=await db.transaction(async tx=>{
    const {rows:[mint]}=await tx.query("SELECT * FROM mint_pool WHERE status='ready' AND suffix=$1 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",[config.suffix]);need(mint,503,'New launch addresses are being prepared. Please try again shortly');assertLaunchMint(mint.address,config.suffix);
    await tx.query("UPDATE mint_pool SET status='reserved' WHERE address=$1",[mint.address]);
-   const {rows:[row]}=await tx.query('INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,initial_buy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *',[id,key,req.session.user_id,input.recipient.toLowerCase(),input.wallet,mint.address,creator.publicKey.toBase58(),encrypt(creator.secretKey,config.encryptionKey,`creator:${id}`),input.name,input.symbol,input.description,metadata.uri,metadata.image,input.initialBuyLamports]);return row;
+   const {rows:[row]}=await tx.query('INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,initial_buy,fee_mode,fee_treasury) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *',[id,key,req.session.user_id,input.recipient.toLowerCase(),input.wallet,mint.address,treasury?feeSharingConfigPda(new PublicKey(mint.address)).toBase58():creator.publicKey.toBase58(),treasury?'':encrypt(creator.secretKey,config.encryptionKey,`creator:${id}`),input.name,input.symbol,input.description,metadata.uri,metadata.image,input.initialBuyLamports,treasury?'sharing-v1':'legacy',treasury]);return row;
   });
   try{
    const prepared=await prepareCreation(launch);
