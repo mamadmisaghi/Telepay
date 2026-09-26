@@ -84,7 +84,7 @@ export function LiveApp(){
   {view==='tele'&&<div className="page-content"><div className="tele-brand-panel"><div className="tele-mark"><Brand/></div><div><h1>Tele · TELE</h1><p>The token identity of TelePay.</p><p>No TELE token contract has been announced.</p></div></div></div>}
   {view==='docs'&&<DocsContent go={go} live/>}
   </>}
-  </main><footer><div><Brand/><p>Token fees for Telegram creators.</p><p>Independent. Not affiliated with Telegram.</p></div><div><span>Product</span><button onClick={()=>go('explore')}>Explore</button><button onClick={()=>go('docs')}>Docs</button><a className="footer-x-link" href="https://x.com/UseTelePay" target="_blank" rel="noopener noreferrer" aria-label="TelePay on X">X</a></div><div><span>Recipient allocation</span><strong>80%</strong><p>20% to TelePay.</p></div></footer></div>
+  </main><footer><div><Brand/><p>Independent. Not affiliated with Telegram.</p></div><div><span>Product</span><button onClick={()=>go('explore')}>Explore</button><button onClick={()=>go('docs')}>Docs</button><a className="footer-x-link" href="https://x.com/UseTelePay" target="_blank" rel="noopener noreferrer" aria-label="TelePay on X">X</a></div><div><span>Recipient allocation</span><strong>80%</strong><p>20% to TelePay.</p></div></footer></div>
 
  </div>;
 }
