@@ -3,21 +3,27 @@ import {useState,type ReactNode} from 'react';
 import {PrivyProvider,usePrivy,useConnectWallet} from '@privy-io/react-auth';
 import {toSolanaWalletConnectors,useWallets,useSignMessage,useSignTransaction} from '@privy-io/react-auth/solana';
 import {WalletContext} from './wallet-context';
-import {walletDisconnectedKey} from './sign-out';
+import {signOutBrowser,walletDisconnectedKey} from './sign-out';
 
 const connectors=toSolanaWalletConnectors({shouldAutoConnect:true});
 function Bridge({children,cluster}:{children:ReactNode;cluster:string}){
  const {ready}=usePrivy(),{wallets,ready:walletsReady}=useWallets();
  const [error,setError]=useState(''),[selected,setSelected]=useState('');
  const [disconnected,setDisconnected]=useState(()=>{try{return localStorage.getItem(walletDisconnectedKey)==='1'}catch{return false}});
- const {connectWallet}=useConnectWallet({onSuccess:({wallet})=>{try{localStorage.removeItem(walletDisconnectedKey)}catch{}setDisconnected(false);setSelected(wallet.address);setError('')},onError:()=>setError('Wallet connection was cancelled or could not complete. Please try again.')});
+ const {connectWallet}=useConnectWallet({onSuccess:async({wallet})=>{
+  // A new wallet connection always requires fresh Telegram verification. This
+  // also cleans up a session left behind by an older cached disconnect flow.
+  try{await signOutBrowser()}catch{setDisconnected(true);try{localStorage.setItem(walletDisconnectedKey,'1')}catch{}setError('Could not sign out of Telegram. Please retry connecting your wallet.');return;}
+  try{localStorage.removeItem(walletDisconnectedKey)}catch{}
+  setDisconnected(false);setSelected(wallet.address);setError('');
+ },onError:()=>setError('Wallet connection was cancelled or could not complete. Please try again.')});
  const {signMessage}=useSignMessage(),{signTransaction}=useSignTransaction();
  // Some external wallets cannot be disconnected programmatically. Keep an explicit
  // app-level disconnect across reloads instead of picking wallets[0] again.
  const wallet=disconnected?undefined:wallets.find(w=>w.address===selected)||(!disconnected?wallets[0]:undefined);
  return <WalletContext.Provider value={{ready:ready&&walletsReady,address:wallet?.address||'',error,
   connect:()=>{setError('');connectWallet({walletChainType:'solana-only'})},
-  disconnect:async()=>{setDisconnected(true);try{localStorage.setItem(walletDisconnectedKey,'1')}catch{}setSelected('');setError('');try{await wallet?.disconnect()}catch{/* The app is already disconnected even if the wallet provider cannot disconnect. */}},
+  disconnect:async()=>{await signOutBrowser();setDisconnected(true);try{localStorage.setItem(walletDisconnectedKey,'1')}catch{}setSelected('');setError('');try{await wallet?.disconnect()}catch{/* The app is already disconnected even if the wallet provider cannot disconnect. */}},
   signMessage:async message=>{if(!wallet)throw new Error('Connect a Solana wallet first.');return (await signMessage({wallet,message})).signature},
   signTransaction:async transaction=>{if(!wallet)throw new Error('Connect a Solana wallet first.');return (await signTransaction({wallet,transaction,chain:cluster==='devnet'?'solana:devnet':'solana:mainnet'})).signedTransaction}
  }}>{children}</WalletContext.Provider>;
