@@ -15,7 +15,7 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
   need(config.launchesEnabled,503,'Token launches are not enabled yet');need(config.encryptionKey&&config.rpcUrl,503,'Launch service is awaiting server configuration');
   const input=schema.parse(req.body),key=req.headers['idempotency-key'];need(typeof key==='string'&&key.length>=16&&key.length<=100,400,'A unique request key is required');
   const existing=await db.query('SELECT * FROM launches WHERE owner_id=$1 AND idempotency_key=$2',[req.session.user_id,key]);if(existing.rowCount)return publicLaunch(existing.rows[0]);
-  const wallet=await db.query('SELECT address FROM wallets WHERE user_id=$1 AND address=$2 AND verification_session_hash=$3',[req.session.user_id,input.wallet,req.session.token_hash]);need(wallet.rowCount,403,'Verify your wallet first');
+  if(req.launcher){need(req.launcher.address===input.wallet,403,'Connected wallet does not match');}else {const wallet=await db.query('SELECT address FROM wallets WHERE user_id=$1 AND address=$2 AND verification_session_hash=$3',[req.session.user_id,input.wallet,req.session.token_hash]);need(wallet.rowCount,403,'Verify your wallet first');}
   const open=await db.query("SELECT count(*)::int AS total FROM launches WHERE owner_id=$1 AND status IN ('preparing','prepared','submitted')",[req.session.user_id]);need(open.rows[0].total<3,429,'Finish an existing launch before preparing another');
   const metadata=await saveMetadata(config,input);const id=randomUUID(),creator=Keypair.generate();
   const launch=await db.transaction(async tx=>{
@@ -46,5 +46,43 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
   if(launch.status==='submitted'){try{await chain.send(launch.transaction_base64);}catch{/* worker reconciles this exact signature */}}
   return publicLaunch(launch);
  });
- app.get('/api/launches/:id',async req=>{const {rows:[row]}=await db.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2',[req.params.id,req.session.user_id]);need(row,404,'Launch not found');return publicLaunch(row);});
+ app.post('/api/launches/:id/refresh',async req=>{
+  need(config.launchesEnabled,503,'Token launches are paused');
+  return db.transaction(async tx=>{
+   const {rows:[row]}=await tx.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2 FOR UPDATE',[req.params.id,req.session.user_id]);need(row,404,'Launch not found');
+   // A submitted signature must be reconciled before any new transaction is prepared.
+   need(['prepared','expired','failed'].includes(row.status),409,'Wait for the existing transaction to finish');
+   if(row.signature){const status=await chain.status(row.signature,row.last_valid_height);need(['failed','expired'].includes(status.state),409,'Existing launch is still pending');}
+   const p=await chain.prepareLaunch({mint:row.mint,creator:row.creator,wallet:row.wallet,name:row.name,symbol:row.symbol,uri:row.metadata_uri,initialBuy:0n});
+   const {rows:[updated]}=await tx.query("UPDATE launches SET status='prepared',message_base64=$2,transaction_base64=$3,last_valid_height=$4,signature=NULL,error=NULL WHERE id=$1 RETURNING *",[row.id,p.message,p.wire,p.lastValidHeight]);
+   await tx.query("UPDATE mint_pool SET status='reserved' WHERE address=$1",[row.mint]);return publicLaunch(updated);
+  });
+ });
+ app.post('/api/launches/:id/buy/prepare',async req=>{
+  need(config.launchesEnabled,503,'Token launches are paused');
+  return db.transaction(async tx=>{
+   const {rows:[row]}=await tx.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2 FOR UPDATE',[req.params.id,req.session.user_id]);need(row,404,'Launch not found');need(row.status==='confirmed',409,'Wait for token creation to finalize');need(BigInt(row.initial_buy)>0n,400,'No initial buy was requested');
+   const previous=(await tx.query('SELECT * FROM launch_buys WHERE launch_id=$1',[row.id])).rows[0];
+   if(previous&&['submitted','confirmed'].includes(previous.status))return buyView(previous);
+   if(previous?.status==='prepared'&&await chain.connection.getBlockHeight('confirmed')<=Number(previous.last_valid_height))return buyView(previous);
+   const p=await chain.prepareBuy({mint:row.mint,wallet:row.wallet,initialBuy:BigInt(row.initial_buy)});
+   const {rows:[buy]}=await tx.query("INSERT INTO launch_buys(launch_id,status,message_base64,transaction_base64,last_valid_height) VALUES($1,'prepared',$2,$3,$4) ON CONFLICT(launch_id) DO UPDATE SET status='prepared',message_base64=EXCLUDED.message_base64,transaction_base64=EXCLUDED.transaction_base64,last_valid_height=EXCLUDED.last_valid_height,signature=NULL RETURNING *",[row.id,p.message,p.wire,p.lastValidHeight]);return buyView(buy);
+  });
+ });
+ app.post('/api/launches/:id/buy/submit',async req=>{
+  need(config.launchesEnabled,503,'Token launches are paused');need(typeof req.body?.transaction==='string'&&req.body.transaction.length<5000,400,'Invalid signed transaction');
+  const buy=await db.transaction(async tx=>{
+   const {rows:[launch]}=await tx.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2 FOR UPDATE',[req.params.id,req.session.user_id]);need(launch,404,'Launch not found');
+   const {rows:[row]}=await tx.query('SELECT * FROM launch_buys WHERE launch_id=$1 FOR UPDATE',[launch.id]);need(row,409,'Prepare the initial buy first');
+   if(['submitted','confirmed'].includes(row.status))return row;
+   need(row.status==='prepared'&&await chain.connection.getBlockHeight('confirmed')<=Number(row.last_valid_height),409,'Initial buy quote expired. Retry the initial buy');
+   const signed=signedMatches(req.body.transaction,row.message_base64,launch.wallet),wire=Buffer.from(signed.serialize()).toString('base64'),signature=bs58.encode(signed.signatures[0]);
+   return (await tx.query("UPDATE launch_buys SET status='submitted',transaction_base64=$2,signature=$3 WHERE launch_id=$1 RETURNING *",[launch.id,wire,signature])).rows[0];
+  });
+  if(buy.status==='submitted'){try{await chain.send(buy.transaction_base64);}catch{}}
+  return buyView(buy);
+ });
+ app.get('/api/launches',async req=>{const {rows}=await db.query('SELECT * FROM launches WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 20',[req.session.user_id]);return {launches:rows.map(publicLaunch)};});
+ app.get('/api/launches/:id',async req=>{const {rows:[row]}=await db.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2',[req.params.id,req.session.user_id]);need(row,404,'Launch not found');const buy=(await db.query('SELECT * FROM launch_buys WHERE launch_id=$1',[row.id])).rows[0];return {...publicLaunch(row),buy:buy?buyView(buy):null};});
 }
+const buyView=r=>({status:r.status,transaction:r.transaction_base64,signature:r.signature,lastValidHeight:r.last_valid_height});

@@ -14,6 +14,7 @@ import {workerTick} from '../src/worker.mjs';
 
 async function fixture(){
  const pg=new PGlite();await pg.exec(await readFile(new URL('../migrations/001_core.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/002_bot_and_buys.sql',import.meta.url),'utf8'));
  const adapt=client=>({query:async(sql,args)=>{if(sql.startsWith('SELECT pg_'))return {rows:[],rowCount:1};const r=await client.query(sql,args);return {...r,rowCount:Math.max(r.affectedRows||0,r.rows.length)};}});
  const db={...adapt(pg),transaction:fn=>pg.transaction(tx=>fn(adapt(tx))),close:()=>pg.close()};
  const config=configFromEnv({PUBLIC_ORIGIN:'http://localhost:8080',TELEGRAM_CLIENT_ID:'123',TELEGRAM_CLIENT_SECRET:'test-secret',PAYOUTS_ENABLED:'true',KEY_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')});
@@ -218,4 +219,53 @@ test('RPC network guard accepts full genesis hashes and rejects mismatched or sh
    const bad=chainService({cluster,rpcUrl:'http://localhost:8899'});bad.connection.getGenesisHash=async()=>incorrect;await assert.rejects(bad.checkNetwork(),/network does not match/);
   }
  }
+});
+
+test('bot login binds wallet signature, browser and fresh Telegram callback; replay cannot refresh claim proof',async()=>{
+ const f=await fixture();Object.assign(f.config,{telegramBotToken:'test-bot',telegramWebhookSecret:'test-webhook'});
+ const calls=[];const app=await buildApp({...f,chain:{},fetcher:async(url,init)=>{calls.push({url,body:JSON.parse(init.body)});return {ok:true,json:async()=>({ok:true,result:{}})};}});
+ try{
+  const address=f.wallet.publicKey.toBase58(),origin=f.config.origin;
+  const start=await app.inject({method:'POST',url:'/api/auth/wallet/start',headers:{origin},payload:{address}});assert.equal(start.statusCode,200,start.body);
+  const proof=start.json(),signature=bs58.encode(nacl.sign.detached(new TextEncoder().encode(proof.message),f.wallet.secretKey));
+  const walletCookie='tp_wallet_login='+start.cookies[0].value;
+  assert.equal((await app.inject({method:'POST',url:'/api/auth/wallet/finish',headers:{origin},payload:{id:proof.id,signature}})).statusCode,400);
+  const finished=await app.inject({method:'POST',url:'/api/auth/wallet/finish',headers:{origin,cookie:walletCookie},payload:{id:proof.id,signature}});assert.equal(finished.statusCode,200,finished.body);
+  assert.equal((await app.inject({method:'POST',url:'/api/auth/wallet/finish',headers:{origin,cookie:walletCookie},payload:{id:proof.id,signature}})).statusCode,401);
+  const launcherCookie='tp_launch='+finished.cookies.find(c=>c.name==='tp_launch').value;
+  const headers={origin,cookie:launcherCookie,'x-launch-csrf':finished.json().csrf};
+  const botStart=await app.inject({method:'POST',url:'/api/auth/bot/start',headers,payload:{}});assert.equal(botStart.statusCode,200,botStart.body);
+  const id=botStart.json().id,botCookie='tp_bot_login='+botStart.cookies[0].value;
+  const callback={callback_query:{id:'callback1',data:'verify:'+id,from:{id:33,username:'HaMoon',first_name:'Owner'},message:{message_id:1,chat:{id:33,type:'private'}}}};
+  assert.equal((await app.inject({method:'POST',url:'/api/telegram/webhook',payload:callback})).statusCode,401);
+  const verified=await app.inject({method:'POST',url:'/api/telegram/webhook',headers:{'x-telegram-bot-api-secret-token':'test-webhook'},payload:callback});assert.equal(verified.statusCode,200,verified.body);
+  const first=(await f.db.query('SELECT verified_at FROM login_requests WHERE id=$1',[id])).rows[0].verified_at;
+  await app.inject({method:'POST',url:'/api/telegram/webhook',headers:{'x-telegram-bot-api-secret-token':'test-webhook'},payload:callback});
+  assert.equal(String((await f.db.query('SELECT verified_at FROM login_requests WHERE id=$1',[id])).rows[0].verified_at),String(first));
+  assert.equal((await app.inject({method:'POST',url:'/api/auth/bot/finish',headers,payload:{id}})).statusCode,400);
+  const done=await app.inject({method:'POST',url:'/api/auth/bot/finish',headers:{...headers,cookie:launcherCookie+'; '+botCookie},payload:{id}});assert.equal(done.statusCode,200,done.body);assert.equal(done.json().username,'hamoon');
+  const cookie='tp_session='+done.cookies.find(c=>c.name==='tp_session').value;
+  const session=(await app.inject({url:'/api/session',headers:{cookie}})).json();assert.equal(session.user.username,'hamoon');assert.equal(session.claimVerificationFresh,true);assert.deepEqual(session.wallets,[address]);
+  assert.equal((await app.inject({method:'POST',url:'/api/auth/bot/finish',headers:{...headers,cookie:launcherCookie+'; '+botCookie},payload:{id}})).statusCode,401);
+  assert.ok(calls.some(c=>c.url.endsWith('/answerCallbackQuery')));
+ }finally{await app.close();await f.db.close();}
+});
+
+test('initial buy signs separately, persists once and reconciles through the worker',async()=>{
+ const f=await fixture();f.config.launchesEnabled=true;
+ const wallet=f.wallet,address=wallet.publicKey.toBase58();
+ await f.db.query("UPDATE launches SET owner_id='2',initial_buy='1000000' WHERE id='launch1'");
+ let preparedCount=0,sendCount=0;
+ const tx=new VersionedTransaction(new TransactionMessage({payerKey:wallet.publicKey,recentBlockhash:Keypair.generate().publicKey.toBase58(),instructions:[SystemProgram.transfer({fromPubkey:wallet.publicKey,toPubkey:Keypair.generate().publicKey,lamports:1000000})]}).compileToV0Message());
+ const chain={prepareBuy:async input=>{preparedCount++;assert.equal(input.initialBuy,1000000n);return {wire:Buffer.from(tx.serialize()).toString('base64'),message:Buffer.from(tx.message.serialize()).toString('base64'),lastValidHeight:100};},connection:{getBlockHeight:async()=>50},send:async()=>{sendCount++;},status:async()=>({state:'confirmed'})};
+ const app=await buildApp({...f,chain});const headers={cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2'};
+ try{
+  const quote=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{}});assert.equal(quote.statusCode,200,quote.body);
+  await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{}});assert.equal(preparedCount,1);
+  tx.sign([wallet]);const payload={transaction:Buffer.from(tx.serialize()).toString('base64')};
+  const submit=await app.inject({method:'POST',url:'/api/launches/launch1/buy/submit',headers,payload});assert.equal(submit.statusCode,200,submit.body);assert.equal(submit.json().status,'submitted');
+  const repeat=await app.inject({method:'POST',url:'/api/launches/launch1/buy/submit',headers,payload});assert.equal(repeat.json().signature,submit.json().signature);assert.equal(sendCount,2);
+  await workerTick({...f,chain});
+  const row=(await app.inject({url:'/api/launches/launch1',headers})).json();assert.equal(row.status,'confirmed');assert.equal(row.buy.status,'confirmed');
+ }finally{await app.close();await f.db.close();}
 });

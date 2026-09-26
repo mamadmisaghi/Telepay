@@ -18,6 +18,14 @@ export async function workerTick({db,config,chain}) {
    await db.transaction(async tx=>{await tx.query('UPDATE launches SET status=$2,error=$3 WHERE id=$1',[launch.id,state.state,'Transaction failed or expired']);await tx.query("UPDATE mint_pool SET status='quarantined' WHERE address=$1",[launch.mint]);});
   }else{try{await chain.send(launch.transaction_base64);}catch{}}
  }
+ const {rows:buys}=await db.query("SELECT * FROM launch_buys WHERE status='submitted' LIMIT 50");
+ for(const buy of buys){
+  const state=await chain.status(buy.signature,buy.last_valid_height);
+  if(state.state==='pending'){try{await chain.send(buy.transaction_base64);}catch{}}
+  else await db.query('UPDATE launch_buys SET status=$2 WHERE launch_id=$1',[buy.launch_id,state.state]);
+ }
+ await db.query('DELETE FROM login_requests WHERE expires_at<now()');
+ await db.query('DELETE FROM launcher_sessions WHERE expires_at<now()');
  // An unsigned expired preparation is quarantined, never handed to another launch.
  if(config.rpcUrl){const height=await chain.connection.getBlockHeight('finalized');await db.query("UPDATE launches SET status='expired' WHERE status='prepared' AND last_valid_height<$1",[height]);}
  if(!config.operatorSecret||!config.treasurySecret)return;

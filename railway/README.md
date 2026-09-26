@@ -27,3 +27,41 @@ Settings are applied through Railway service configuration. New Railway services
 6. Verify actual collection of creator fees and the exact 80/20 ledger allocation, then verify a small Telegram-authenticated claim and its finalized receipt. Test fee credits do not establish mainnet collector correctness.
 
 Mainnet transactions are intentionally not enabled by deploying this container. The encrypted credentials checkpoint is a backup, not automatic Railway configuration. Mainnet readiness is separate from a healthy deployment.
+
+## Integrated operations (2026-09-26)
+
+The approved `app/page.tsx` remains the application shell, including its sidebar,
+header/footer, fonts and clearly labeled sample listings. `platform-actions.tsx`
+connects the existing dialogs to the API. Do not switch to the old LiveApp layout.
+
+- Wallet-only launch authentication signs a browser-bound, expiring message.
+- Telegram bot confirmation binds the current username to that signed wallet and
+  browser. Each claim needs a proof younger than two minutes; its time begins at
+  Telegram confirmation, not when the browser polls. No username-to-ID lookup is
+  required at creation.
+- Create and optional initial buy have separate wallet approvals. A 1% slippage
+  allowance applies to the buy. The same launch/mint resumes after expiration.
+- The worker reconciles finalized create/buy/collection/sweep/claim transactions.
+  Allocations are credited only after the treasury actually receives the sweep.
+- Fresh mainnet treasury and gas-payer keys are stored in Railway Variables;
+  two privately generated, unused addresses end in exact `TeLe`. The deployment
+  bootstrap imports mint keys once and checks that they do not exist on chain.
+- `node src/prepare-deploy.mjs` migrates PostgreSQL and imports the mint pool.
+- `railway/Worker.Dockerfile` runs the worker without a public domain.
+- The web service volume mounts `/srv/telepaid/data`. Its entrypoint prepares
+  metadata ownership and drops to uid/gid 1000 before starting the HTTP service.
+
+Keep collections/payouts paused until the operator gas wallet is funded and the
+first controlled mainnet launch/trade can be reconciled. Launches require the
+connected user's explicit wallet signature and SOL for account rent and fees.
+There are no production fake-fee or simulated-credit endpoints.
+
+Operator gas wallet: `BU6RZQ1R9upPsUVqpnHYSc7Kjj5gYHDYZJYKkuRHBVUz`
+Treasury (receives collected fees): `Gs5XjivVJVQNmAhcHVVXZYUivTJ6NmhhBZJRVP7UfVn2`
+Never fund or reuse the old shared Devnet test private key on mainnet.
+
+Before unrestricted public launch: complete one funded mainnet create, optional
+buy, creator-fee collection, fresh real-user Telegram verification and claim;
+verify Privy allows the Railway origin; check restore/backup policies for the
+Postgres and metadata volumes; replenish the vanity pool beyond its initial two
+addresses. Test success alone is not a security audit of a custodial service.

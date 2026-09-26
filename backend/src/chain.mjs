@@ -2,7 +2,7 @@ import {Connection,Keypair,PublicKey,TransactionMessage,VersionedTransaction,Sys
 import {PUMP_SDK,OnlinePumpSdk,getBuyTokenAmountFromSolAmount,creatorVaultPda} from '@pump-fun/pump-sdk';
 import BN from 'bn.js';
 import {coinCreatorVaultAtaPda,coinCreatorVaultAuthorityPda} from '@pump-fun/pump-swap-sdk';
-import {NATIVE_MINT,TOKEN_PROGRAM_ID,getAssociatedTokenAddressSync,createCloseAccountInstruction} from '@solana/spl-token';
+import {NATIVE_MINT,TOKEN_PROGRAM_ID,TOKEN_2022_PROGRAM_ID,getAssociatedTokenAddressSync,createCloseAccountInstruction} from '@solana/spl-token';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {need} from './errors.mjs';
@@ -32,23 +32,30 @@ export function chainService(config) {
   await checkNetwork();const latest=await connection.getLatestBlockhash('confirmed');
   const tx=new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:latest.blockhash,instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:400000}),...instructions]}).compileToV0Message());
   if(signers.length)tx.sign(signers);
+  need(tx.serialize().length<=1232,422,'Transaction exceeds the Solana packet limit');
   return {tx,lastValidHeight:latest.lastValidBlockHeight,wire:Buffer.from(tx.serialize()).toString('base64'),message:Buffer.from(tx.message.serialize()).toString('base64')};
  }
  return {
   connection,sdk,checkNetwork,
   async prepareLaunch({mint,creator,wallet,name,symbol,uri,initialBuy}) {
    const args={mint:new PublicKey(mint),creator:new PublicKey(creator),user:new PublicKey(wallet),name,symbol,uri,mayhemMode:false,holderReward:false};
-   let instructions;
-   if(initialBuy>0n){
-    await checkNetwork();const global=await sdk.fetchGlobal();const feeConfig=await sdk.fetchFeeConfig();
-    const amount=getBuyTokenAmountFromSolAmount({global,feeConfig,mintSupply:null,bondingCurve:null,amount:new BN(initialBuy.toString()),quoteMint:PublicKey.default});
-    instructions=await PUMP_SDK.createV2AndBuyInstructions({...args,global,amount,solAmount:new BN(initialBuy.toString())});
-   }else instructions=[await PUMP_SDK.createV2Instruction(args)];
+   // Creation and optional buy are separate wallet approvals to stay under Solana's 1232-byte limit.
+   const instructions=[await PUMP_SDK.createV2Instruction(args)];
    const prepared=await build(instructions,args.user);
    const simulation=await connection.simulateTransaction(prepared.tx,{sigVerify:false,commitment:'confirmed'});
    need(!simulation.value.err,422,'Launch simulation failed. Check your wallet balance and try again');
    const fee=await connection.getFeeForMessage(prepared.tx.message,'confirmed');
    return {...prepared,networkFeeLamports:String(fee.value??0),simulationUnits:simulation.value.unitsConsumed??null};
+  },
+  async prepareBuy({mint,wallet,initialBuy}){
+   await checkNetwork();const mintKey=new PublicKey(mint),user=new PublicKey(wallet);
+   const [global,feeConfig,state]=await Promise.all([sdk.fetchGlobal(),sdk.fetchFeeConfig(),sdk.fetchBuyState(mintKey,user,TOKEN_2022_PROGRAM_ID)]);
+   const solAmount=new BN(initialBuy.toString());
+   const amount=getBuyTokenAmountFromSolAmount({global,feeConfig,mintSupply:global.tokenTotalSupply,bondingCurve:state.bondingCurve,amount:solAmount,quoteMint:PublicKey.default});
+   const instructions=await PUMP_SDK.buyInstructions({global,...state,mint:mintKey,user,amount,solAmount,slippage:1,tokenProgram:TOKEN_2022_PROGRAM_ID});
+   const prepared=await build(instructions,user);
+   const simulation=await connection.simulateTransaction(prepared.tx,{sigVerify:false,commitment:'confirmed'});
+   need(!simulation.value.err,422,'Initial buy simulation failed. Check your SOL balance and try again');return prepared;
   },
   async collection(creator,operator){
    await checkNetwork();const instructions=await sdk.collectCoinCreatorFeeInstructions(creator.publicKey,operator.publicKey);
@@ -68,7 +75,7 @@ export function chainService(config) {
    const height=await connection.getBlockHeight('finalized');
    return {state:height>Number(lastValidHeight)?'expired':'pending'};
   },
-  async verifyMint(mint,creator){const curve=await sdk.fetchBondingCurve(mint);need(curve.creator.toBase58()===creator,409,'On-chain fee recipient does not match the launch');return curve;},
+  async verifyMint(mint,creator){const curve=await sdk.fetchBondingCurve(new PublicKey(mint));need(curve.creator.toBase58()===creator,409,'On-chain fee recipient does not match the launch');return curve;},
   async collectedFees(signature,creator){
    const tx=await connection.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:0});
    need(tx&&!tx.meta?.err,503,'Finalized collection is not available');

@@ -2,7 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {"builder": "DOCKERFILE", "dockerfilePath": "railway/Dockerfile"},
   "deploy": {
-    "preDeployCommand": ["node src/migrate.mjs"],
+    "preDeployCommand": ["node src/prepare-deploy.mjs"],
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 180,
     "restartPolicyType": "ON_FAILURE",

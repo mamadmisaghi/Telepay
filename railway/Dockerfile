@@ -23,7 +23,6 @@ COPY backend/migrations ./migrations
 COPY lib/domain /srv/telepaid/lib/domain
 COPY --from=frontend /app/railway-dist /srv/telepaid/public
 RUN mkdir -p /srv/telepaid/data/metadata && chown -R node:node /srv/telepaid/data
-USER node
 ENV NODE_ENV=production PORT=8080 STATIC_DIR=/srv/telepaid/public UI_MODE=preview METADATA_DIR=/srv/telepaid/data/metadata
 EXPOSE 8080
-CMD ["node", "src/main.mjs"]
+CMD ["node", "src/start.mjs"]
