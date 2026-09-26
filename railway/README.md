@@ -9,11 +9,13 @@ This target serves the existing approved `app/page.tsx` interface and mock data 
 - App: `9db4d553-b3ec-4280-8bdf-ea134904db9b`
 - PostgreSQL: `3a31421e-b79a-4be3-b356-cb24f57645d0`, private networking and persistent volume.
 - GitHub source: `mamadmisaghi/Telepay`, `main`.
-- Dockerfile: `railway/Dockerfile`; Railway configuration: `/railway.json`.
+- Dockerfile: `railway/Dockerfile`; settings reference: `railway/service-settings.json`.
 - Pre-deploy command: `node src/migrate.mjs`.
 - Healthcheck: `/api/health` verifies PostgreSQL connectivity.
 
 Runtime variables: `PUBLIC_ORIGIN` (the actual HTTPS app origin), `PORT=8080`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `UI_MODE=preview`, `PRIVY_APP_ID`, `SOLANA_CLUSTER=mainnet-beta`, and `SOLANA_RPC_URL`. Keep `LAUNCHES_ENABLED`, `COLLECTIONS_ENABLED`, and `PAYOUTS_ENABLED` all `false` initially. Secrets belong in Railway Variables, never in frontend bundles.
+
+Settings are applied through Railway service configuration. New Railway services no longer accept legacy `railway.json` Config as Code; `service-settings.json` documents the intended values and is not automatically applied.
 
 ## Before the first mainnet transaction
 
