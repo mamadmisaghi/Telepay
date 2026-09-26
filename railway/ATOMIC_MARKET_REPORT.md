@@ -46,3 +46,22 @@
   configuration. This release does not claim an end-to-end live fee/claim test.
 - A wallet-approved mainnet launch is still the final real-funds acceptance test.
   Earlier create-only tokens cannot retroactively receive an atomic developer buy.
+
+## Live deployment verification
+
+- Runtime commit: `47b70b27567ad86166a2b635c76ff86bb39ecfd9`.
+- Web deployment `73804ff5-8f24-438b-bab9-7c1c0bd07414`: SUCCESS
+  (same runtime commit; private mint pool replenishment).
+- Worker deployment `10f7d929-718e-4aa4-aa68-9ddf082eaf39`: SUCCESS.
+- Existing Test token market API returns HTTP 200, real SOL curve price and both
+  buys and sells. Browser renders the price chart, interval controls, real trade
+  table and explorer links; there is no initial-buy section on the token page.
+- Confirmed Telegram profile selection works from a pasted t.me link and enables
+  launch review. Sidebar collapse/expand and mixed sample/live listings are intact.
+- Read-only wallet-authenticated audit found the earlier two mint addresses already
+  consumed/reserved by one confirmed and one failed launch. Two fresh TeLe mint
+  keys were generated privately, added to Railway Variables and imported by the
+  successful pre-deploy bootstrap. Existing mint records were not reused.
+- Browser review rejects a changed, unconfirmed recipient after an earlier valid
+  selection. A pasted t.me link resolves to the exact selected username.
+- Wallet audit signed only a login message. No transaction was signed or broadcast.
