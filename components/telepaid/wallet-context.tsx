@@ -19,7 +19,7 @@ class WalletErrorBoundary extends Component<{children:ReactNode;page:ReactNode},
 export function WalletProvider({children}:{children:ReactNode}){
  const [config,setConfig]=useState<{privyAppId?:string;cluster?:string}|null>(null),[error,setError]=useState('');
  useEffect(()=>{let active=true;
-  if(location.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(location.hostname)){setError('Open TelePaid over HTTPS to connect your wallet.');return;}
+  if(location.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(location.hostname)){setError('Open TelePay over HTTPS to connect your wallet.');return;}
   fetch('/api/runtime').then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<{privyAppId?:string;cluster?:string}>}).then(c=>{if(active){setConfig(c);if(!c.privyAppId)setError('Wallet connection is awaiting configuration.');}}).catch(()=>{if(active)setError('Wallet service could not be reached. Reload to retry.');});return()=>{active=false}},[]);
  if(!config?.privyAppId)return <WalletContext.Provider value={{...fallback,error}}>{children}</WalletContext.Provider>;
  return <WalletErrorBoundary page={children}><Suspense fallback={<WalletContext.Provider value={fallback}>{children}</WalletContext.Provider>}><PrivyWallet appId={config.privyAppId} cluster={config.cluster||'mainnet-beta'}>{children}</PrivyWallet></Suspense></WalletErrorBoundary>;

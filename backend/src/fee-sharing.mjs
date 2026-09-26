@@ -16,7 +16,7 @@ export async function sharingLaunchInstructions(args,treasury,global,amount,solA
  return [base[0],await PUMP_SDK.createFeeSharingConfig({creator:user,mint,pool:null}),await PUMP_SDK.updateFeeSharesV2({authority:user,mint,currentShareholders:[user],newShareholders:[{address:new PublicKey(treasury),shareBps:10000}],quoteMint:NATIVE_MINT,quoteTokenProgram:TOKEN_PROGRAM_ID}),...base.slice(1)];
 }
 export function assertSharing(config,mint,treasury){
- need(config.mint.toBase58()===mint&&config.adminRevoked&&config.shareholders.length===1&&config.shareholders[0].address.toBase58()===treasury&&config.shareholders[0].shareBps===10000,409,'On-chain fee sharing does not match the locked TelePaid allocation');
+ need(config.mint.toBase58()===mint&&config.adminRevoked&&config.shareholders.length===1&&config.shareholders[0].address.toBase58()===treasury&&config.shareholders[0].shareBps===10000,409,'On-chain fee sharing does not match the locked TelePay allocation');
 }
 const disc=createHash('sha256').update('event:DistributeCreatorFeesEvent').digest().subarray(0,8);
 export function sharingReceipt(tx,mint,treasury,decoder=PUMP_SDK){

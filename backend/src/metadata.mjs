@@ -10,7 +10,7 @@ export async function saveMetadata(config,input) {
  await mkdir(config.metadataDir,{recursive:true});const imageName=`${hash(bytes)}.${match[1]}`;
  await writeFile(resolve(config.metadataDir,imageName),bytes,{flag:'w',mode:0o644});
  const image=`${config.origin}/api/metadata/${imageName}`;
- const doc=JSON.stringify({name:input.name,symbol:input.symbol,description:[input.description,`Fees to @${input.recipient.toLowerCase()} via TelePaid`].filter(Boolean).join('\n\n'),image,external_url:input.website||config.origin,properties:{category:'image',files:[{uri:image,type:`image/${match[1]}`}]},extensions:{telepaid:{recipient:input.recipient.toLowerCase(),recipient_share_bps:8000,project_share_bps:2000,mint_suffix:'TeLe'},telegram:input.telegram||undefined,twitter:input.twitter||undefined,website:input.website||undefined}});
+ const doc=JSON.stringify({name:input.name,symbol:input.symbol,description:[input.description,`Fees to @${input.recipient.toLowerCase()} via TelePay`].filter(Boolean).join('\n\n'),image,external_url:input.website||config.origin,properties:{category:'image',files:[{uri:image,type:`image/${match[1]}`}]},extensions:{telepaid:{recipient:input.recipient.toLowerCase(),recipient_share_bps:8000,project_share_bps:2000,mint_suffix:'TeLe'},telegram:input.telegram||undefined,twitter:input.twitter||undefined,website:input.website||undefined}});
  const filename=`${hash(doc)}.json`;await writeFile(resolve(config.metadataDir,filename),doc,{mode:0o644});
  return {uri:await compactMetadata(config,`${config.origin}/api/metadata/${filename}`),image};
 }

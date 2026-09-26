@@ -36,7 +36,7 @@ export function ClaimsDashboard({go,onVerify}:{go:(route:string)=>void;onVerify:
    {loading&&!tokens.length?<p className="claim-message" role="status">Loading your tokens…</p>:!error&&!tokens.length?<div className="claim-message"><h3>No tokens assigned yet</h3><p>Tokens launched for @{handle} will appear here, even before they earn any fees.</p><button className="btn outline" onClick={()=>go('launch')}>Launch a token <ArrowUpRight size={15}/></button></div>:null}
    {!!tokens.length&&<div className="claim-token-list">{tokens.map(token=><button key={token.id} className="claim-token-row" onClick={()=>go('token/'+token.id)} aria-label={`View ${token.name} token`}><div className="claim-token-name"><img src={token.image_uri} alt="" loading="lazy"/><div><strong>{token.name}</strong><span>{token.symbol} · Solana</span></div></div><span className="claim-token-date">Created {new Date(token.confirmed_at).toLocaleDateString()}</span><div className="claim-token-earned"><strong>{asSOL(token.earned_lamports)} <span>SOL</span></strong><small>Your earned share · 80%</small></div><ArrowUpRight size={18}/></button>)}</div>}
    {next!==null&&<button className="btn outline claim-load-more" disabled={loading} onClick={()=>void load(next)}>{loading?'Loading…':'Load more tokens'}</button>}
-   <p className="claim-token-note">Earnings reflect finalized fees received by TelePaid. A token can appear here with zero earnings. Withdrawals use your combined account balance.</p>
+   <p className="claim-token-note">Earnings reflect finalized fees received by TelePay. A token can appear here with zero earnings. Withdrawals use your combined account balance.</p>
   </section>
  </div>;
 }

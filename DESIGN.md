@@ -1,4 +1,4 @@
-# TelePaid visual system
+# TelePay visual system
 
 ## Approved direction
 The user approved the Graphite Blue palette mockup (option 1, 2026-09-26). Preserve the existing Inter typeface, layout, and detail density. Use neutral charcoal surfaces with the logo blue reserved for primary actions, Telegram headline, selected controls, verification, and earnings.

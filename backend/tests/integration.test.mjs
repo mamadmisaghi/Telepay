@@ -619,3 +619,23 @@ test('bot rotation updates the verification link; a refreshed signed-in session 
   assert.equal(claim.statusCode,401,claim.body);assert.equal((await f.db.query('SELECT * FROM claims')).rowCount,0);
  }finally{await app.close();await f.db.close();}
 });
+
+test('TelePay bot welcomes without directory opt-in and exposes explicit discovery and branded verification',async()=>{
+ const f=await fixture();f.config.telegramBotToken='test-bot';f.config.telegramWebhookSecret='test-secret';
+ const sent=[];const fetcher=async(url,opts)=>{sent.push({method:url.split('/').pop(),body:JSON.parse(opts.body)});return {ok:true,json:async()=>({ok:true,result:true})}};
+ const app=await buildApp({...f,chain:{},fetcher});
+ const event=text=>app.inject({method:'POST',url:'/api/telegram/webhook',headers:{'x-telegram-bot-api-secret-token':'test-secret'},payload:{message:{text,chat:{id:7,type:'private'},from:{id:7,username:'example_user',first_name:'Example'}}}});
+ try{
+  assert.equal((await event('/start')).statusCode,200);
+  assert.match(sent.at(-1).body.text,/Welcome to TelePay/);
+  assert.equal(sent.at(-1).body.reply_markup.inline_keyboard[1][0].url,'https://x.com/UseTelePay');
+  assert.equal((await f.db.query('SELECT * FROM telegram_directory')).rowCount,0);
+  assert.equal((await event('/discover')).statusCode,200);
+  assert.equal((await f.db.query('SELECT * FROM telegram_directory')).rowCount,1);
+  await f.db.query("INSERT INTO login_requests(id,kind,binding_hash,address,expires_at) VALUES('11111111-1111-4111-8111-111111111111','telegram','test-hash',$1,now()+interval '10 minutes')",[f.wallet.publicKey.toBase58()]);
+  assert.equal((await event('/start 11111111-1111-4111-8111-111111111111')).statusCode,200);
+  assert.match(sent.at(-1).body.text,/TelePay · Verify your account/);
+  assert.match(sent.at(-1).body.text,new RegExp(f.wallet.publicKey.toBase58()));
+  assert.equal(sent.at(-1).body.reply_markup.inline_keyboard[0][0].callback_data,'verify:11111111-1111-4111-8111-111111111111');
+ }finally{await app.close();await f.db.close();}
+});

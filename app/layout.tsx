@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TelePaid — Token fees for Telegram creators",
+  title: "TelePay — Token fees for Telegram creators",
   description: "Launch a token on Solana for a Telegram account. 80% of received creator fees belong to its owner. Verify with Telegram and claim.",
   other: {
     "codex-preview": "development",

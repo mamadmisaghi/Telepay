@@ -1,4 +1,4 @@
-# TelePaid on Railway
+# TelePay on Railway
 
 This target serves the existing approved `app/page.tsx` interface and mock data from the Node API container. It does not substitute the separate VPS/Devnet UI. `UI_MODE=preview` must remain set until real actions have been integrated into the approved design.
 
@@ -74,3 +74,19 @@ buy, creator-fee collection, fresh real-user Telegram verification and claim;
 verify Privy allows the Railway origin; check restore/backup policies for the
 Postgres and metadata volumes; replenish the vanity pool beyond its initial two
 addresses. Test success alone is not a security audit of a custodial service.
+
+## TelePay domain and bot profile
+
+The custom domain `telepay.live` is attached to the web service. Its root DNS
+record must point to the Railway target returned by Railway's Domains panel.
+Wait for DNS and TLS verification before changing `PUBLIC_ORIGIN` from the
+existing Railway HTTPS origin; all wallet/Telegram POST requests use this exact
+origin for CSRF and redirect checks. Also add the verified domain to Privy's
+allowed origins and any Telegram OAuth configuration before switching over.
+
+The web service configures the bot display name, descriptions, commands, menu,
+and the complete supplied JPEG profile photo after startup. It keeps a
+fingerprint in the persistent metadata volume to avoid adding duplicate
+photos on subsequent process restarts. It updates the deep-link bot username
+from Telegram's `getMe` response when the configured token belongs to a
+renamed bot. Logs contain only the bot username or an API method/error code.

@@ -7,7 +7,7 @@ export function configFromEnv(env = process.env) {
   if (new URL(origin).origin !== origin) throw new Error('PUBLIC_ORIGIN must be an origin without a trailing slash or path');
   if (env.NODE_ENV === 'production' && !origin.startsWith('https://')) throw new Error('Production requires HTTPS');
   const suffix = env.MINT_SUFFIX || 'TeLe';
-  if(suffix !== 'TeLe') throw new Error('All TelePaid launches must use the approved TeLe suffix');
+  if(suffix !== 'TeLe') throw new Error('All TelePay launches must use the approved TeLe suffix');
   if (suffix) assertValidSuffix(suffix);
   const previousTreasurySecrets=JSON.parse(secret(env,'PREVIOUS_TREASURY_KEYPAIRS')||'[]');
   if(!Array.isArray(previousTreasurySecrets)||previousTreasurySecrets.length>16||previousTreasurySecrets.some(k=>typeof k!=='string'||!k))throw new Error('Invalid previous treasury configuration');

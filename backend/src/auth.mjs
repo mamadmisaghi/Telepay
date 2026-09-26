@@ -61,7 +61,7 @@ export function authRoutes(app,{db,config,verifyIdentity=verifyTelegram,fetcher=
   const address=req.body?.address;let pub;try{pub=new PublicKey(address);}catch{need(false,400,'Invalid Solana wallet');}
   need(PublicKey.isOnCurve(pub.toBytes()),400,'A signing wallet is required');
   const id=randomUUID(),issued=new Date(),expires=new Date(issued.getTime()+300000);
-  const message=`${new URL(config.origin).host} wants you to verify this Solana wallet for TelePaid:\n${address}\n\nThis signature links your wallet to Telegram account ${req.session.user_id}. It does not authorize a transfer.\n\nURI: ${config.origin}\nNonce: ${id}\nIssued At: ${issued.toISOString()}\nExpiration Time: ${expires.toISOString()}`;
+  const message=`${new URL(config.origin).host} wants you to verify this Solana wallet for TelePay:\n${address}\n\nThis signature links your wallet to Telegram account ${req.session.user_id}. It does not authorize a transfer.\n\nURI: ${config.origin}\nNonce: ${id}\nIssued At: ${issued.toISOString()}\nExpiration Time: ${expires.toISOString()}`;
   await db.query('INSERT INTO wallet_challenges(id,user_id,address,message,expires_at) VALUES($1,$2,$3,$4,$5)',[id,req.session.user_id,address,message,expires]);return {id,message};
  });
  app.post('/api/wallet/verify',async req=>{

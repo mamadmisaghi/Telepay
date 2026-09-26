@@ -1,6 +1,6 @@
-# TelePaid product policy
+# TelePay product policy
 
-Name TelePaid; project token Tele; ticker TELE. Solana / Pump.fun.
+Name TelePay; project token Tele; ticker TELE. Solana / Pump.fun.
 
 80% of actually received creator fees belongs to the named Telegram **username**; 20% is the project allocation. Apply the split once on finalized collection, never again on withdrawal. No buyback, burn, supply, expiry, or TELE-specific exemption has been approved.
 
