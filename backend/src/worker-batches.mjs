@@ -3,7 +3,7 @@ export async function tokenBatch(db,kind,limit=20){
  if(!['market','fees','collection'].includes(kind))throw new Error('Unknown worker batch');
  await db.query('INSERT INTO worker_cursors(kind) VALUES($1) ON CONFLICT DO NOTHING',[kind]);
  const {rows:[cursor]}=await db.query('SELECT last_id FROM worker_cursors WHERE kind=$1',[kind]);
- const select=after=>db.query("SELECT l.* FROM launches l WHERE l.status='confirmed' AND ($1::text IS NULL OR l.id>$1) AND ($2::text<>'fees' OR l.fee_mode='sharing-v1') ORDER BY l.id LIMIT $3",[after,kind,limit]);
+ const select=after=>db.query("SELECT l.* FROM launches l WHERE l.status='confirmed' AND ($1::text IS NULL OR l.id>$1) AND ($2::text='market' OR l.source='platform') AND ($2::text<>'fees' OR l.fee_mode='sharing-v1') ORDER BY l.id LIMIT $3",[after,kind,limit]);
  let {rows}=await select(cursor.last_id);if(!rows.length&&cursor.last_id)({rows}=await select(null));
  return rows;
 }

@@ -13,8 +13,10 @@ import {database} from './db.mjs';
 import {chainService,readKey} from './chain.mjs';
 import {decrypt} from './crypto.mjs';
 import {recordCollection,finishClaim} from './ledger.mjs';
+import {syncOfficialMints} from './official-mints.mjs';
 
 export async function workerTick({db,config,chain}) {
+ if(config.rpcUrl)await syncOfficialMints({db,chain});
  const {rows:launches}=await db.query("SELECT * FROM launches WHERE status='submitted' ORDER BY created_at LIMIT 50");
  for(const launch of launches){
   const state=await chain.status(launch.signature,launch.last_valid_height);

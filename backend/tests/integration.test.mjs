@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
-import {Keypair,TransactionMessage,VersionedTransaction,SystemProgram} from '@solana/web3.js';
+import {Keypair,PublicKey,TransactionMessage,VersionedTransaction,SystemProgram} from '@solana/web3.js';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import {buildApp} from '../src/app.mjs';
@@ -11,6 +11,10 @@ import {hash,encrypt,decrypt} from '../src/crypto.mjs';
 import {reserveClaim,recordCollection,finishClaim} from '../src/ledger.mjs';
 import {signedMatches} from '../src/chain.mjs';
 import {workerTick} from '../src/worker.mjs';
+import {syncOfficialMints,officialCreation} from '../src/official-mints.mjs';
+import {tokenBatch} from '../src/worker-batches.mjs';
+import {createHash} from 'node:crypto';
+import {PUMP_PROGRAM_ID} from '@pump-fun/pump-sdk';
 
 async function fixture(){
  const pg=new PGlite();await pg.exec(await readFile(new URL('../migrations/001_core.sql',import.meta.url),'utf8'));
@@ -19,6 +23,7 @@ async function fixture(){
  await pg.exec(await readFile(new URL('../migrations/004_sharing_analytics.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/005_worker_operations.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/006_treasury_rotation.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/007_official_mint.sql',import.meta.url),'utf8'));
  const adapt=client=>({query:async(sql,args)=>{if(sql.startsWith('SELECT pg_'))return {rows:[],rowCount:1};const r=await client.query(sql,args);return {...r,rowCount:Math.max(r.affectedRows||0,r.rows.length)};}});
  const db={...adapt(pg),transaction:fn=>pg.transaction(tx=>fn(adapt(tx))),close:()=>pg.close()};
  const config=configFromEnv({PUBLIC_ORIGIN:'http://localhost:8080',TELEGRAM_CLIENT_ID:'123',TELEGRAM_CLIENT_SECRET:'test-secret',PAYOUTS_ENABLED:'true',KEY_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')});
@@ -30,6 +35,36 @@ async function fixture(){
  await db.query("INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,status,confirmed_at) VALUES('launch1','launch-key','1','hamoon',$1,$2,$3,'encrypted','Token','TOK','description','https://example.test/token.json','https://example.test/token.png','confirmed',now())",[wallet.publicKey.toBase58(),mint,Keypair.generate().publicKey.toBase58()]);
  return {pg,db,config,wallet};
 }
+
+test('official mint waits for an authenticated Pump create, appears publicly and never accrues Telegram claim fees',async()=>{
+ const f=await fixture();const {rows:[watch]}=await f.db.query('SELECT * FROM official_mints');
+ const treasury=watch.expected_wallet,mint=watch.mint,pump=PUMP_PROGRAM_ID.toBase58();
+ const payload=Buffer.concat([createHash('sha256').update('event:CreateEvent').digest().subarray(0,8),Buffer.alloc(2)]).toString('base64');
+ const event={name:'TelePay',symbol:'TELE',uri:'https://ipfs.io/ipfs/official-metadata',mint:new PublicKey(mint),user:new PublicKey(treasury),creator:new PublicKey(treasury),isHolderReward:false};
+ const decoder={decodeCreateEventBc:()=>event};const tx={meta:{err:null,logMessages:[`Program ${pump} invoke [1]`,`Program data: ${payload}`,`Program ${pump} success`]},blockTime:1234567890};
+ const foreign={...tx,meta:{...tx.meta,logMessages:[`Program ${Keypair.generate().publicKey} invoke [1]`,`Program data: ${payload}`]}};
+ assert.equal(officialCreation(foreign,mint,treasury,decoder),null);
+ assert.equal(officialCreation(tx,mint,Keypair.generate().publicKey.toBase58(),decoder),null);
+ assert.equal(officialCreation(tx,mint,treasury,decoder)?.name,'TelePay');
+ let live=false;
+ const chain={checkNetwork:async()=>{},connection:{getAccountInfo:async()=>live?{owner:PUMP_PROGRAM_ID}:null,getSignaturesForAddress:async()=>[{signature:'official-create',err:null}],getTransaction:async()=>tx}};
+ const params={db:f.db,chain,decoder,decodeCurve:()=>({creator:new PublicKey(treasury)}),fetcher:async()=>new Response(JSON.stringify({description:'Official project coin',image:'https://ipfs.io/ipfs/official-art'}),{headers:{'content-type':'application/json'}})};
+ try{
+  await syncOfficialMints(params);assert.equal((await f.db.query('SELECT id FROM launches WHERE source=$1',['official'])).rowCount,0);
+  live=true;await syncOfficialMints(params);await syncOfficialMints(params);
+  assert.equal((await f.db.query('SELECT id FROM launches WHERE source=$1',['official'])).rowCount,1);
+  assert.ok((await tokenBatch(f.db,'market')).some(row=>row.id===watch.launch_id));
+  assert.ok(!(await tokenBatch(f.db,'collection')).some(row=>row.id===watch.launch_id));
+  assert.ok(!(await tokenBatch(f.db,'fees')).some(row=>row.id===watch.launch_id));
+  const app=await buildApp({...f,chain});try{
+   const tokens=(await app.inject('/api/public/tokens')).json().tokens;
+   const official=tokens.find(token=>token.mint===mint);assert.ok(official);assert.equal(official.recipient_handle,null);assert.equal(official.source,'official');
+   const detail=(await app.inject(`/api/public/token/${watch.launch_id}`)).json();assert.equal(detail.source,'official');
+   assert.equal((await app.inject('/api/public/profiles')).json().profiles.some(p=>p.handle===null),false);
+   const stats=(await app.inject('/api/public/analytics')).json();assert.equal(stats.collected,'0');assert.equal(stats.unclaimed,'0');
+  }finally{await app.close();}
+ }finally{await f.db.close();}
+});
 
 test('fee events are idempotent; exact 80/20 is credited to the handle, not the creator or original account ID',async()=>{
  const f=await fixture();try{
