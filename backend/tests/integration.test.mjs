@@ -445,3 +445,19 @@ test('a single finalized transaction may distribute for two mints, with independ
  assert.deepEqual((await f.db.query('SELECT earned::text FROM balances ORDER BY handle')).rows.map(x=>x.earned),['80','80']);
  }finally{await f.db.close()}
 });
+
+test('recipient workspace lists zero-fee tokens from other launchers and paginates by exact username',async()=>{
+ const f=await fixture();const app=await buildApp({...f,chain:{}});
+ try{
+  const initial=(await app.inject('/api/public/profile/%40HAMOON')).json();
+  assert.equal(initial.tokens.length,1);assert.equal(initial.tokens[0].earned_lamports,'0');assert.equal(initial.nextOffset,null);
+  assert.equal((await f.db.query("SELECT owner_id FROM launches WHERE id='launch1'")).rows[0].owner_id,'1');
+  assert.equal((await app.inject({url:'/api/session',headers:{cookie:'tp_session=session2'}})).json().user.username,'hamoon');
+  await f.db.query("INSERT INTO mint_pool(address,secret_encrypted,suffix,status) SELECT mint||n,'test','TeLe','consumed' FROM launches CROSS JOIN generate_series(1,49) n WHERE id='launch1'");
+  await f.db.query("INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,status,confirmed_at) SELECT 'page-'||n,'page-key-'||n,'1','hamoon',wallet,mint||n,creator||n,'encrypted','Token '||n,symbol,description,metadata_uri,image_uri,'confirmed',confirmed_at FROM launches CROSS JOIN generate_series(1,49) n WHERE id='launch1'");
+  const page=(await app.inject('/api/public/profile/hamoon')).json();assert.equal(page.tokens.length,48);assert.equal(page.nextOffset,48);
+  const last=(await app.inject('/api/public/profile/hamoon?offset=48')).json();assert.equal(last.tokens.length,2);assert.equal(last.nextOffset,null);assert.equal(new Set([...page.tokens,...last.tokens].map(t=>t.id)).size,50);
+  assert.equal((await app.inject('/api/public/profile/hamoon2')).json().tokens.length,0);
+  assert.equal((await app.inject('/api/public/profile/hamoon?offset=-10')).json().tokens.length,48);
+ }finally{await app.close();await f.db.close()}
+});

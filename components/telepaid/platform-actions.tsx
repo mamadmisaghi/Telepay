@@ -5,7 +5,7 @@ import {fromPublicToken,type Token,type PublicToken} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
 
 type Runtime={integrated?:boolean;telegram:boolean;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
-type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];balance?:{available:string;reserved:string;settled:string}};
+type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{available:string;reserved:string;settled:string}};
 export type Launch={id:string;mint:string;name:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;launchFormat?:string;buy?:{status:string;transaction:string;signature?:string}};
 export async function request<T=any>(path:string,body?:unknown,headers:Record<string,string>={}){
  const r=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'content-type':'application/json',...headers},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(45000)});
@@ -20,7 +20,7 @@ export function PlatformProvider({children}:{children:ReactNode}){
  const [liveTokens,setLiveTokens]=useState<Token[]>([]),[tokensError,setTokensError]=useState('');
  const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
  useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>void refreshTokens(),30000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens]);
- async function refresh(){setSession(await request('/api/session'));}
+ const refresh=useCallback(async()=>{setSession(await request('/api/session'));},[]);
  useEffect(()=>{void request('/api/runtime').then(setRuntime).catch(()=>{});void refresh().catch(()=>{});},[]);
  return <PlatformContext.Provider value={{runtime,session,refresh,liveTokens,tokensError,refreshTokens}}>{children}</PlatformContext.Provider>;
 }
@@ -39,14 +39,40 @@ async function ensureLauncher(wallet:ReturnType<typeof useTeleWallet>){
 const encode=(bytes:Uint8Array)=>btoa(String.fromCharCode(...bytes));
 const decode=(value:string)=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
 export function TransactionLink({signature,cluster}:{signature?:string;cluster?:string}){return signature?<a className="text-link" href={`https://solscan.io/tx/${signature}${cluster==='devnet'?'?cluster=devnet':''}`} target="_blank" rel="noreferrer">View transaction ↗</a>:null;}
-export function TelegramAction(){
- const wallet=useTeleWallet(),{runtime,session,refresh}=usePlatform(),{busy,error,run}=useOperation();
- const [login,setLogin]=useState<{id:string;url:string}|null>(null),[notice,setNotice]=useState('');
- async function start(){const s=await ensureLauncher(wallet);setLogin(await request('/api/auth/bot/start',{}, {'x-launch-csrf':s.csrf}));setNotice('Open the bot, confirm the wallet shown there, then return here.');}
- async function finish(){const s=await ensureLauncher(wallet),result=await request('/api/auth/bot/finish',{id:login?.id},{'x-launch-csrf':s.csrf});if(result.pending){setNotice('Waiting for your confirmation in Telegram.');return;}setLogin(null);await refresh();setNotice(`@${result.username} verified. Your wallet is ready for fee claims.`);}
- return <>{!wallet.address?<WalletButton className="btn white"/>:<p className="field-help">Wallet: {wallet.address.slice(0,6)}…{wallet.address.slice(-6)}</p>}
+type BotLogin={id:string;url:string;address:string;expiresAt:number;csrf:string};
+export function TelegramAction({onVerified}:{onVerified?:(username:string)=>void}){
+ const wallet=useTeleWallet(),{runtime,session,refresh}=usePlatform();
+ const [login,setLogin]=useState<BotLogin|null>(null),[notice,setNotice]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const lock=useRef(false),completed=useRef(''),active=useRef(true),latestWallet=useRef(wallet.address),verified=useRef(onVerified);
+ latestWallet.current=wallet.address;verified.current=onVerified;
+ useEffect(()=>{active.current=true;return()=>{active.current=false}},[]);
+ useEffect(()=>{setLogin(null);completed.current='';setError('');try{const saved=JSON.parse(sessionStorage.getItem('telepaid:telegram-verification')||'null');if(saved?.address===wallet.address&&saved.expiresAt>Date.now())setLogin(saved);}catch{}},[wallet.address]);
+ function save(value:BotLogin|null){setLogin(value);try{if(value)sessionStorage.setItem('telepaid:telegram-verification',JSON.stringify(value));else sessionStorage.removeItem('telepaid:telegram-verification');}catch{}}
+ async function start(){
+  if(lock.current)return;lock.current=true;setBusy(true);setError('');const address=wallet.address;
+  try{const s=await ensureLauncher(wallet);const result=await request('/api/auth/bot/start',{}, {'x-launch-csrf':s.csrf});if(!active.current||latestWallet.current!==address)return;completed.current='';save({...result,address,csrf:s.csrf,expiresAt:Date.now()+result.expiresIn*1000});setNotice('Open Telegram, confirm your wallet in the bot, then return. We’ll finish verification automatically.');}
+  catch(e){if(active.current)setError(e instanceof Error?e.message:'Could not start verification. Try again.');}finally{lock.current=false;if(active.current)setBusy(false);}
+ }
+ const finish=useCallback(async()=>{
+  if(!login||lock.current||latestWallet.current!==login.address)return;
+  if(login.expiresAt<Date.now()&&!completed.current){save(null);setError('This verification expired. Start again below.');return;}
+  lock.current=true;setBusy(true);
+  try{
+   if(!completed.current){const result=await request('/api/auth/bot/finish',{id:login.id},{'x-launch-csrf':login.csrf});if(!active.current||latestWallet.current!==login.address)return;if(result.pending){setNotice('Waiting for your confirmation in Telegram…');return;}completed.current=result.username;}
+   await refresh();if(!active.current||latestWallet.current!==login.address)return;
+   const username=completed.current;save(null);setError('');setNotice(`@${username} verified successfully.`);verified.current?.(username);
+  }catch(e){if(active.current){setError(e instanceof Error?e.message:'Could not check verification. Try again.');}}
+  finally{lock.current=false;if(active.current)setBusy(false);}
+ },[login,refresh]);
+ useEffect(()=>{
+  if(!login||error)return;
+  const check=()=>{if(document.visibilityState==='visible')void finish();};
+  const timer=setInterval(check,8000);window.addEventListener('focus',check);document.addEventListener('visibilitychange',check);
+  return()=>{clearInterval(timer);window.removeEventListener('focus',check);document.removeEventListener('visibilitychange',check)};
+ },[login,error,finish]);
+ return <>{!wallet.address?<WalletButton className="btn white"/>:<p className="field-help">Receiving wallet: {wallet.address.slice(0,6)}…{wallet.address.slice(-6)}</p>}
  {session.user&&<p className="field-help">Signed in as @{session.user.username}</p>}
- {!login?<button className="btn white" disabled={busy||!wallet.address||!runtime?.telegram} onClick={()=>void run(start)}>{busy?'Waiting for wallet…':'Verify with TelePayFunBot'}</button>:<><a className="btn white" href={login.url} target="_blank" rel="noreferrer">Open Telegram bot</a><button className="btn outline" disabled={busy} onClick={()=>void run(finish)}>{busy?'Checking…':'I confirmed in Telegram'}</button><button className="text-link" disabled={busy} onClick={()=>void run(start)}>Start a new verification</button></>}
+ {!login?<button className="btn white" disabled={busy||!wallet.address||!runtime?.telegram} onClick={()=>void start()}>{busy?'Waiting for wallet…':'Verify with TelePayFunBot'}</button>:<><a className="btn white" href={login.url} target="_blank" rel="noreferrer">Open Telegram bot</a><button className="btn outline" disabled={busy} onClick={()=>{setError('');void finish()}}>{busy?'Checking…':'Check verification'}</button><button className="text-link" disabled={busy} onClick={()=>void start()}>Start a new verification</button></>}
  {!runtime?.telegram&&<p className="field-help">Telegram verification is awaiting configuration.</p>}{notice&&<p className="field-help" role="status">{notice}</p>}{error&&<p className="form-error" role="alert">{error}</p>}</>;
 }
 export function LaunchAction({form,image,onCreated}:{onCreated:(id:string)=>void;form:{name:string;symbol:string;recipient:string;description:string;website:string;telegram:string;twitter:string;initialBuy:string};image:string}){
@@ -72,13 +98,15 @@ export function LaunchAction({form,image,onCreated}:{onCreated:(id:string)=>void
 }
 export function ClaimAccount({onVerify}:{onVerify:()=>void}){
  const {session,runtime,refresh}=usePlatform(),wallet=useTeleWallet(),{busy,error,run}=useOperation();
+ const [proofExpired,setProofExpired]=useState(false);
+ useEffect(()=>{const until=Date.parse(session.claimVerificationExpiresAt||'');setProofExpired(!until||Date.now()>=until);if(!until)return;const timer=setTimeout(()=>setProofExpired(true),Math.max(0,until-Date.now()));return()=>clearTimeout(timer)},[session.claimVerificationExpiresAt]);
  const [claim,setClaim]=useState<{id:string;status:string;signature?:string}|null>(null),key=useRef(crypto.randomUUID());
  useEffect(()=>{if(!claim||!['queued','submitted'].includes(claim.status))return;const timer=setInterval(()=>{void request('/api/claims').then(r=>{const found=r.claims.find((c:{id:string})=>c.id===claim.id);if(found){setClaim(found);if(['confirmed','failed'].includes(found.status))void refresh();}}).catch(()=>{})},5000);return()=>clearInterval(timer)},[claim]);
  useEffect(()=>{key.current=crypto.randomUUID();if(session.user)void request('/api/claims').then(r=>setClaim(r.claims[0]||null)).catch(()=>{})},[session.csrf]);
  if(!runtime?.integrated||!session.user)return null;
  const available=session.balance?.available||'0';
  async function submit(){const result=await request('/api/claims',{wallet:wallet.address,amount:available},{'x-csrf-token':session.csrf||'','idempotency-key':key.current});setClaim(result);await refresh();}
- return <div className="lookup-result"><h3>@{session.user.username}</h3><div className="lookup-amount">{asSOL(available)} <span>SOL</span></div><p>Available creator fees · {asSOL(session.balance?.reserved)} SOL pending</p>
- {!session.claimVerificationFresh||!session.wallets?.includes(wallet.address)?<button className="btn white" onClick={onVerify}>Verify Telegram & wallet</button>:<button className="btn white" disabled={busy||!runtime.claims||BigInt(available)<BigInt(runtime.minimumClaimLamports)||!!claim&&['queued','submitted'].includes(claim.status)} onClick={()=>void run(submit)}>{busy?'Submitting…':'Claim to connected wallet'}</button>}
- {!runtime.claims&&<p className="field-help">Payouts are paused until the settlement service is funded.</p>}{claim&&<p role="status">Claim {claim.status} <TransactionLink signature={claim.signature} cluster={runtime.cluster}/></p>}{error&&<p className="form-error" role="alert">{error}</p>}</div>;
+ return <section className="claim-balance" aria-label="Your creator fees"><dl className="claim-balances"><div><dt>Available to claim</dt><dd>{asSOL(available)} <span>SOL</span></dd></div><div><dt>Withdrawn</dt><dd>{asSOL(session.balance?.settled)} <span>SOL</span></dd></div><div><dt>Pending withdrawal</dt><dd>{asSOL(session.balance?.reserved)} <span>SOL</span></dd></div></dl><div className="claim-controls">
+ {!session.claimVerificationFresh||proofExpired||!session.wallets?.includes(wallet.address)?<button className="btn white" onClick={onVerify}>Verify Telegram & wallet</button>:<button className="btn white" disabled={busy||!runtime.claims||BigInt(available)<BigInt(runtime.minimumClaimLamports)||!!claim&&['queued','submitted'].includes(claim.status)} onClick={()=>void run(submit)}>{busy?'Submitting…':'Claim to connected wallet'}</button>}
+ </div>{!runtime.claims?<p className="field-help">Payouts are currently paused. Your verified account and assigned tokens are shown below.</p>:BigInt(available)<BigInt(runtime.minimumClaimLamports)&&<p className="field-help">Minimum claim: {asSOL(runtime.minimumClaimLamports)} SOL. Only finalized, collected fees count toward your balance.</p>}{claim&&<p role="status">Claim {claim.status} <TransactionLink signature={claim.signature} cluster={runtime.cluster}/></p>}{error&&<p className="form-error" role="alert">{error}</p>}</section>;
 }

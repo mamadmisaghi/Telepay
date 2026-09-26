@@ -47,7 +47,7 @@ export function authRoutes(app,{db,config,verifyIdentity=verifyTelegram,fetcher=
   const wallets=await db.query('SELECT address FROM wallets WHERE user_id=$1 AND verification_session_hash=$2 ORDER BY verified_at DESC',[s.user_id,s.token_hash]);
   const {rows:[b]}=await db.query('SELECT earned,reserved,settled FROM balances WHERE handle=$1',[s.username]);
   const balance=b||{earned:'0',reserved:'0',settled:'0'};
-  return {user:{id:s.user_id,username:s.username,name:s.display_name},csrf:s.csrf,claimVerificationFresh:!s.claim_used&&Date.now()-new Date(s.created_at).getTime()<120000,wallets:wallets.rows.map(w=>w.address),balance:{...balance,available:(BigInt(balance.earned)-BigInt(balance.reserved)-BigInt(balance.settled)).toString()}};
+  return {user:{id:s.user_id,username:s.username,name:s.display_name},csrf:s.csrf,claimVerificationExpiresAt:new Date(new Date(s.created_at).getTime()+120000).toISOString(),claimVerificationFresh:!s.claim_used&&Date.now()-new Date(s.created_at).getTime()<120000,wallets:wallets.rows.map(w=>w.address),balance:{...balance,available:(BigInt(balance.earned)-BigInt(balance.reserved)-BigInt(balance.settled)).toString()}};
  });
  app.post('/api/wallet/challenge',async req=>{
   const address=req.body?.address;let pub;try{pub=new PublicKey(address);}catch{need(false,400,'Invalid Solana wallet');}

@@ -1,0 +1,9 @@
+# Verified recipient workspace — 2026-09-26
+
+- Telegram verification checks automatically every eight seconds while visible and when the user returns to the browser. One in-flight request is shared by polling and manual checking. Wallet signatures are requested only when starting verification, never by background polling.
+- Successful verification refreshes the authenticated session, closes the dialog, opens Claims and announces success. Pending requests survive a dialog reopen in the same browser tab until expiry; switching wallets does not confirm a request for another wallet.
+- Authenticated Claims replaces the sign-in/sample area with Telegram identity, available profile photo, verified receiving wallet and copy control, balances, claim action and tokens assigned to the exact verified username. Other pages retain their sample listings and layout.
+- Recipient tokens use the public profile query, independent of launcher, fee balance and payout enablement. Pagination covers more than 48 tokens. Token rows open internal token detail pages.
+- The UI receives the proof expiry time so it requests fresh verification when required; the backend two-minute claim proof and payout controls are unchanged.
+
+Validation: seven targeted backend tests passed, including browser/wallet-bound Telegram callback and replay protections, exact username matching, zero-fee tokens from another launcher and 50-token pagination. An isolated React interaction fixture verified pending → automatic completion → closed dialog → account tokens, concurrent focus/visibility deduplication and internal token navigation. TypeScript and production Vite builds passed. The cloud browser cannot open the local fixture; authenticated mobile/desktop visual verification and a new real Telegram sign-in remain user-side checks. No financial transactions or account-verification messages were sent by these tests.

@@ -59,9 +59,10 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  });
  app.get('/api/public/profile/:handle',async req=>{
   const handle=normalizeHandle(req.params.handle);need(/^[a-z][a-z0-9_]{3,31}$/.test(handle),400,'Invalid Telegram username');
+  const offset=Math.max(0,Math.min(100000,Math.floor(Number(req.query.offset)||0)));
   const {rows:[balance]}=await db.query('SELECT earned::text,settled::text,reserved::text FROM balances WHERE handle=$1',[handle]);
-  const {rows:tokens}=await db.query("SELECT l.id,l.mint,l.name,l.symbol,l.description,l.image_uri,l.confirmed_at,l.recipient_handle,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.recipient_handle=$1 AND l.status='confirmed' ORDER BY l.confirmed_at DESC LIMIT 48",[handle]);
-  return {handle,balance:balance||{earned:'0',settled:'0',reserved:'0'},tokens};
+  const {rows:tokens}=await db.query("SELECT l.id,l.mint,l.name,l.symbol,l.description,l.image_uri,l.confirmed_at,l.recipient_handle,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.recipient_handle=$1 AND l.status='confirmed' ORDER BY l.confirmed_at DESC,l.id DESC LIMIT 49 OFFSET $2",[handle,offset]);
+  return {handle,balance:balance||{earned:'0',settled:'0',reserved:'0'},tokens:tokens.slice(0,48),nextOffset:tokens.length>48?offset+48:null};
  });
  app.get('/api/claims',async req=>{const {rows}=await db.query('SELECT id,handle,wallet,amount::text,status,signature,created_at FROM claims WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',[req.session.user_id]);return {claims:rows};});
  app.post('/api/claims',async req=>{
