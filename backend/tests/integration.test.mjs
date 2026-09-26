@@ -480,6 +480,25 @@ test('recipient workspace lists zero-fee tokens from other launchers and paginat
   assert.equal((await app.inject('/api/public/profile/hamoon?offset=-10')).json().tokens.length,48);
  }finally{await app.close();await f.db.close()}
 });
+test('public Telegram profile directory deduplicates confirmed recipients, shows their current photo and exact earned amount',async()=>{
+ const f=await fixture();
+ const fetcher=async url=>({ok:true,text:async()=>{const handle=new URL(url).pathname.slice(1);return `<div class="tgme_page_title">${handle==='gofihouse'?'GoFi in the House':'Hamoon'}</div><div class="tgme_page_extra">@${handle}</div><img class="tgme_page_photo_image" src="https://cdn4.telesco.pe/file/${handle}.jpg"><a>Send Message</a>`;}});
+ const app=await buildApp({...f,chain:{},fetcher});
+ try{
+  for(const [id,handle,status] of [['second','hamoon','confirmed'],['third','gofihouse','confirmed'],['draft','nobody','preparing']]){
+   const mint=Keypair.generate().publicKey.toBase58(),creator=Keypair.generate().publicKey.toBase58();
+   await f.db.query("INSERT INTO mint_pool(address,secret_encrypted,suffix,status) VALUES($1,'test','TeLe','consumed')",[mint]);
+   await f.db.query("INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,status,confirmed_at) SELECT $1,$1,'1',$2,wallet,$3,$4,'encrypted',name,symbol,description,metadata_uri,image_uri,$5,now() FROM launches WHERE id='launch1'",[id,handle,mint,creator,status]);
+  }
+  await recordCollection(f.db,{eventId:'fee-directory',launchId:'launch1',recipientHandle:'hamoon',signature:'sig-directory',lamports:125n,slot:1});
+  const result=await app.inject('/api/public/profiles');assert.equal(result.statusCode,200,result.body);
+  const {profiles,nextOffset}=result.json();assert.equal(nextOffset,null);assert.equal(profiles.length,2);
+  const hamoon=profiles.find(p=>p.handle==='hamoon'),gofi=profiles.find(p=>p.handle==='gofihouse');
+  assert.equal(hamoon.token_count,2);assert.equal(hamoon.earned_lamports,'100');assert.equal(hamoon.name,'Hamoon');assert.ok(hamoon.photo.endsWith('/hamoon.jpg'));
+  assert.equal(gofi.token_count,1);assert.equal(gofi.earned_lamports,'0');assert.equal(gofi.name,'GoFi in the House');assert.ok(gofi.photo.endsWith('/gofihouse.jpg'));
+  assert.equal((await app.inject('/api/public/profiles?offset=2')).json().profiles.length,0);
+ }finally{await app.close();await f.db.close()}
+});
 
 test('worker batches cover more than fifty tokens, persist progress, and retry failed markets next cycle',async()=>{
  const {marketBatch}=await import('../src/worker-batches.mjs');const f=await fixture();

@@ -125,3 +125,8 @@ img.detail-art { object-fit:cover; flex-shrink:0; }
 
 .claim-balances.fee-summary{grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
 @media(max-width:1050px){.claim-balances.fee-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.claim-balances.fee-summary>div:first-child{grid-column:auto}}
+.profile-cover-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55;filter:saturate(.8)}
+.profile-photo-placeholder{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(135deg,#1a2733,#273c4b);color:var(--ice)}
+.profile-avatar:is(img){object-fit:cover;background:var(--card)}
+.profile-avatar-placeholder{display:grid;place-items:center;background:#243849;color:var(--ice)}
+.profiles-load-more{display:flex;margin:24px auto 0}

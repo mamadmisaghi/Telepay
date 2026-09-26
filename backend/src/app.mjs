@@ -48,6 +48,20 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
   const search=String(req.query.q||'').slice(0,80),offset=Math.max(0,Math.min(100000,Number(req.query.offset)||0));
   const {rows}=await db.query("SELECT l.id,l.mint,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,'0') AS earned_lamports,COALESCE(f.gross,'0') AS collected_lamports,CASE WHEN m.updated_at>now()-interval '90 seconds' AND m.sol_usd_at>now()-interval '3 minutes' THEN m.spot_price_sol*m.sol_usd*m.supply ELSE NULL END AS market_cap_usd,(SELECT max(t.traded_at) FROM market_trades t WHERE t.launch_id=l.id) AS last_trade_at FROM launches l LEFT JOIN market_state m ON m.launch_id=l.id LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND (l.name ILIKE $1 OR l.symbol ILIKE $1 OR l.recipient_handle ILIKE $1) ORDER BY l.confirmed_at DESC LIMIT 48 OFFSET $2",[`%${search}%`,offset]);return {tokens:rows};
  });
+ app.get('/api/public/profiles',async req=>{
+  const offset=Math.max(0,Math.min(100000,Math.floor(Number(req.query.offset)||0)));
+  const {rows}=await db.query("SELECT l.recipient_handle AS handle,count(*)::int AS token_count,COALESCE(b.earned,0)::text AS earned_lamports,max(l.confirmed_at) AS latest_launch_at FROM launches l LEFT JOIN balances b ON b.handle=l.recipient_handle WHERE l.status='confirmed' GROUP BY l.recipient_handle,b.earned ORDER BY latest_launch_at DESC,l.recipient_handle ASC LIMIT 25 OFFSET $1",[offset]);
+  const page=rows.slice(0,24),profiles=[];
+  // Bound Telegram lookups: a large public directory must not open dozens of
+  // concurrent MTProto or HTTP requests. The existing resolver caches results.
+  for(let i=0;i<page.length;i+=6){
+   const group=await Promise.all(page.slice(i,i+6).map(async row=>{
+    try{const identity=await recipients.find(row.handle);return {...row,name:identity.status==='found'?identity.name:row.handle,photo:identity.status==='found'?identity.photo:null};}
+    catch{return {...row,name:row.handle,photo:null};}
+   }));profiles.push(...group);
+  }
+  return {profiles,nextOffset:rows.length>24?offset+24:null};
+ });
  app.get('/api/public/token/:id',async req=>{
   const {rows:[token]}=await db.query("SELECT l.id,l.mint,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND l.id=$1",[req.params.id]);need(token,404,'Token not found');return token;
  });
