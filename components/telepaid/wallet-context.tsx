@@ -3,6 +3,7 @@ import {Component,createContext,useContext,useEffect,useState,lazy,Suspense,type
 import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 import {DropdownMenu,DropdownMenuTrigger,DropdownMenuContent,DropdownMenuItem} from '@/components/ui/dropdown-menu';
 import {LogOut} from 'lucide-react';
+import {signOutBrowser} from './sign-out';
 
 export type TeleWallet={ready:boolean;address:string;error:string;connect:()=>void;disconnect:()=>Promise<void>;signMessage:(message:Uint8Array)=>Promise<Uint8Array>;signTransaction:(transaction:Uint8Array)=>Promise<Uint8Array>};
 const unavailable=async():Promise<never>=>{throw new Error('Wallet service is not ready. Please try again.');};
@@ -28,7 +29,7 @@ export function WalletProvider({children}:{children:ReactNode}){
 export function WalletButton({className='btn outline small'}:{className?:string;onVerify?:()=>Promise<void>;verified?:boolean}){
  const wallet=useTeleWallet();const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  useEffect(()=>{setOpen(false);setError('');},[wallet.address]);
- async function disconnect(){setBusy(true);setError('');try{await wallet.disconnect();setOpen(false);}catch{setError('Could not disconnect. Please try again.');}finally{setBusy(false)}}
+ async function disconnect(){setBusy(true);setError('');try{await signOutBrowser();await wallet.disconnect();setOpen(false);}catch(e){setError(e instanceof Error?e.message:'Could not disconnect. Please try again.');}finally{setBusy(false)}}
  if(wallet.address)return <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
   <DropdownMenuTrigger asChild><button type="button" className={className} aria-label={`Wallet ${wallet.address}. Open wallet menu`}>{wallet.address.slice(0,4)+'…'+wallet.address.slice(-4)}</button></DropdownMenuTrigger>
   <DropdownMenuContent align="end" sideOffset={8} className="wallet-menu" aria-label="Wallet options">

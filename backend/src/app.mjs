@@ -31,6 +31,8 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
   const publicGet=req.method==='GET'&&(path==='/api/health'||path==='/api/runtime'||path==='/api/session'||path.startsWith('/api/auth/telegram')||path.startsWith('/api/public/')||path.startsWith('/api/metadata/')||path.startsWith('/api/m/'));
   if(publicGet||req.method==='GET'&&path==='/api/auth/wallet/session')return;
   if(req.method==='POST'&&path==='/api/telegram/webhook')return;
+  // Signing out must work even when only a wallet launcher session remains.
+  if(req.method==='POST'&&path==='/api/auth/logout'){need(req.headers.origin===config.origin,403,'Request origin did not match');return;}
   if(req.method==='POST'&&['/api/auth/wallet/start','/api/auth/wallet/finish','/api/auth/bot/start','/api/auth/bot/finish'].includes(path)){need(req.headers.origin===config.origin,403,'Request origin did not match');return;}
   if(path.startsWith('/api/launches')){const launcher=await launcherFor(db,req);if(launcher){req.launcher=launcher;req.session=launcher;if(req.method!=='GET'){need(req.headers.origin===config.origin,403,'Request origin did not match');need(equal(req.headers['x-csrf-token'],launcher.csrf),403,'Verify your wallet again');}return;}}
   req.session=await sessionFor(db,req);need(req.session,401,'Sign in with Telegram to continue');

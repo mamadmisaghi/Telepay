@@ -215,6 +215,23 @@ test('public endpoints hide secrets; launch and claim switches fail closed; logo
  }finally{await app.close();await f.db.close()}
 });
 
+test('wallet disconnect clears both Telegram and launcher sessions, and logout is idempotent without a Telegram session',async()=>{
+ const f=await fixture();const app=await buildApp({...f,chain:{}});try{
+  await f.db.query("INSERT INTO launcher_sessions(token_hash,user_id,address,csrf,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 hour')",[hash('launcher2'),'2',f.wallet.publicKey.toBase58(),'launch-csrf']);
+  const cookies='tp_session=session2; tp_launch=launcher2';
+  assert.equal((await app.inject({url:'/api/session',headers:{cookie:cookies}})).json().user.username,'hamoon');
+  assert.equal((await app.inject({url:'/api/auth/wallet/session',headers:{cookie:cookies}})).json().address,f.wallet.publicKey.toBase58());
+  assert.equal((await app.inject({method:'POST',url:'/api/auth/logout',headers:{cookie:cookies}})).statusCode,403);
+  const logout=await app.inject({method:'POST',url:'/api/auth/logout',headers:{cookie:cookies,origin:f.config.origin}});
+  assert.equal(logout.statusCode,200);assert.equal(logout.json().ok,true);
+  assert.ok(logout.cookies.some(c=>c.name==='tp_session'&&c.value===''));
+  assert.ok(logout.cookies.some(c=>c.name==='tp_launch'&&c.value===''));
+  assert.equal((await app.inject({url:'/api/session',headers:{cookie:cookies}})).json().user,null);
+  assert.equal((await app.inject({url:'/api/auth/wallet/session',headers:{cookie:cookies}})).json().address,null);
+  assert.equal((await app.inject({method:'POST',url:'/api/auth/logout',headers:{cookie:cookies,origin:f.config.origin}})).statusCode,200);
+ }finally{await app.close();await f.db.close()}
+});
+
 test('collection and sweep finalize before the 80/20 credit; retries never duplicate the receipt',async()=>{
  const f=await fixture();try{
   f.config.collectionsEnabled=true;f.config.treasurySecret=bs58.encode(Keypair.generate().secretKey);f.config.operatorSecret=bs58.encode(Keypair.generate().secretKey);

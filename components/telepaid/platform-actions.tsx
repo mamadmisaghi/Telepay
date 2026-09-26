@@ -3,6 +3,7 @@ import {createContext,useContext,useEffect,useRef,useState,useCallback,type Reac
 import bs58 from 'bs58';
 import {fromPublicToken,type Token,type PublicToken} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
+import {signOutBrowser,walletDisconnectedKey} from './sign-out';
 
 type Runtime={integrated?:boolean;telegram:boolean;telegramBotUsername?:string;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
 type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{earned:string;available:string;reserved:string;settled:string}};
@@ -29,9 +30,22 @@ export const usePlatform=()=>useContext(PlatformContext);
 export function PlatformProvider({children}:{children:ReactNode}){
  const [runtime,setRuntime]=useState<Runtime|null>(null),[session,setSession]=useState<Session>({user:null});
  const [liveTokens,setLiveTokens]=useState<Token[]>([]),[tokensError,setTokensError]=useState('');
+ const sessionEpoch=useRef(0),detachedLogout=useRef(false);
  const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
  useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>void refreshTokens(),30000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens]);
- const refresh=useCallback(async()=>{setSession(await request('/api/session'));},[]);
+ const refresh=useCallback(async()=>{
+  const epoch=sessionEpoch.current;
+  let disconnected=false;try{disconnected=localStorage.getItem(walletDisconnectedKey)==='1'}catch{}
+  if(disconnected){
+   setSession({user:null});
+   if(!detachedLogout.current){await signOutBrowser();detachedLogout.current=true;}
+   return;
+  }
+  detachedLogout.current=false;
+  const next=await request<Session>('/api/session');
+  if(epoch===sessionEpoch.current)setSession(next);
+ },[]);
+ useEffect(()=>{const clear=()=>{sessionEpoch.current++;detachedLogout.current=true;setSession({user:null})};window.addEventListener('telepaid:logged-out',clear);return()=>window.removeEventListener('telepaid:logged-out',clear)},[]);
  useEffect(()=>{void request('/api/runtime').then(setRuntime).catch(()=>{});void refresh().catch(()=>{});
   const sync=()=>{if(document.visibilityState==='visible')void refresh().catch(()=>{})};
   const timer=setInterval(sync,60000);window.addEventListener('focus',sync);

@@ -41,7 +41,15 @@ export function authRoutes(app,{db,config,verifyIdentity=verifyTelegram,fetcher=
   const token=randomToken();await db.query('INSERT INTO sessions(token_hash,user_id,csrf,verified_handle,expires_at) VALUES($1,$2,$3,$4,now()+interval \'24 hours\')',[hash(token),identity.id,randomToken(),identity.username?.toLowerCase()||null]);
   reply.setCookie('tp_session',token,{...cookie,maxAge:86400});return reply.redirect('/#claims');
  });
- app.post('/api/auth/logout',async(req,reply)=>{await db.query('DELETE FROM sessions WHERE token_hash=$1',[req.session.token_hash]);reply.clearCookie('tp_session',cookie);return {ok:true};});
+ app.post('/api/auth/logout',async(req,reply)=>{
+  if(req.cookies.tp_session)await db.query('DELETE FROM sessions WHERE token_hash=$1',[hash(req.cookies.tp_session)]);
+  if(req.cookies.tp_launch)await db.query('DELETE FROM launcher_sessions WHERE token_hash=$1',[hash(req.cookies.tp_launch)]);
+  if(req.cookies.tp_bot_login)await db.query("DELETE FROM login_requests WHERE kind='telegram' AND binding_hash=$1",[hash(req.cookies.tp_bot_login)]);
+  if(req.cookies.tp_wallet_login)await db.query("DELETE FROM login_requests WHERE kind='wallet' AND binding_hash=$1",[hash(req.cookies.tp_wallet_login)]);
+  if(req.cookies.tp_login)await db.query('DELETE FROM oauth_states WHERE binding_hash=$1',[hash(req.cookies.tp_login)]);
+  for(const name of ['tp_session','tp_launch','tp_bot_login','tp_wallet_login','tp_login'])reply.clearCookie(name,cookie);
+  return {ok:true};
+ });
  app.get('/api/session',async req=>{
   const s=await sessionFor(db,req);if(!s)return {user:null};
   const wallets=await db.query('SELECT address FROM wallets WHERE user_id=$1 AND verification_session_hash=$2 ORDER BY verified_at DESC',[s.user_id,s.token_hash]);
