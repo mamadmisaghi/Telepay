@@ -17,7 +17,12 @@ export async function saveMetadata(config,input) {
 export function metadataRoutes(app,config){app.get('/api/metadata/:filename',async(req,reply)=>{
  const filename=req.params.filename;need(/^[a-f0-9]{64}\.(png|jpeg|webp|json)$/.test(filename),404,'File not found');
  let bytes;try{bytes=await readFile(resolve(config.metadataDir,filename));}catch{need(false,404,'File not found');}
- const ext=filename.split('.').pop();reply.header('Cache-Control','public, max-age=31536000, immutable').type(ext==='json'?'application/json':`image/${ext}`);return reply.send(bytes);
+ const ext=filename.split('.').pop();
+ // Existing launches keep their original Railway image URLs after a custom-domain switch.
+ // These public token images must remain embeddable from the new site origin.
+ if(ext!=='json')reply.header('Cross-Origin-Resource-Policy','cross-origin');
+ reply.header('Cache-Control','public, max-age=31536000, immutable').type(ext==='json'?'application/json':`image/${ext}`);
+ return reply.send(bytes);
 });}
 
 // A compact content-addressed URI keeps atomic create + buy below Solana's packet limit.
