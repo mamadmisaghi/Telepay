@@ -12,10 +12,28 @@ export async function saveMetadata(config,input) {
  const image=`${config.origin}/api/metadata/${imageName}`;
  const doc=JSON.stringify({name:input.name,symbol:input.symbol,description:[input.description,`Fees to @${input.recipient.toLowerCase()} via TelePaid`].filter(Boolean).join('\n\n'),image,external_url:input.website||config.origin,properties:{category:'image',files:[{uri:image,type:`image/${match[1]}`}]},extensions:{telepaid:{recipient:input.recipient.toLowerCase(),recipient_share_bps:8000,project_share_bps:2000,mint_suffix:'TeLe'},telegram:input.telegram||undefined,twitter:input.twitter||undefined,website:input.website||undefined}});
  const filename=`${hash(doc)}.json`;await writeFile(resolve(config.metadataDir,filename),doc,{mode:0o644});
- return {uri:`${config.origin}/api/metadata/${filename}`,image};
+ return {uri:await compactMetadata(config,`${config.origin}/api/metadata/${filename}`),image};
 }
 export function metadataRoutes(app,config){app.get('/api/metadata/:filename',async(req,reply)=>{
  const filename=req.params.filename;need(/^[a-f0-9]{64}\.(png|jpeg|webp|json)$/.test(filename),404,'File not found');
  let bytes;try{bytes=await readFile(resolve(config.metadataDir,filename));}catch{need(false,404,'File not found');}
  const ext=filename.split('.').pop();reply.header('Cache-Control','public, max-age=31536000, immutable').type(ext==='json'?'application/json':`image/${ext}`);return reply.send(bytes);
+});}
+
+// A compact content-addressed URI keeps atomic create + buy below Solana's packet limit.
+// Existing full metadata URLs remain available indefinitely.
+export async function compactMetadata(config,uri){
+ if(uri.startsWith(`${config.origin}/api/m/`))return uri;
+ const filename=uri.startsWith(`${config.origin}/api/metadata/`)?uri.split('/').pop():'';
+ need(/^[a-f0-9]{64}\.json$/.test(filename),422,'This launch metadata must be prepared again');
+ const doc=await readFile(resolve(config.metadataDir,filename));
+ const id=Buffer.from(hash(doc),'hex').subarray(0,16).toString('base64url');
+ const path=resolve(config.metadataDir,`${id}.json`);
+ try{await writeFile(path,doc,{flag:'wx',mode:0o644});}catch(e){if(e.code!=='EEXIST')throw e;need((await readFile(path)).equals(doc),500,'Metadata alias collision');}
+ return `${config.origin}/api/m/${id}`;
+}
+export function compactMetadataRoutes(app,config){app.get('/api/m/:id',async(req,reply)=>{
+ need(/^[A-Za-z0-9_-]{22}$/.test(req.params.id),404,'File not found');
+ let bytes;try{bytes=await readFile(resolve(config.metadataDir,`${req.params.id}.json`));}catch{need(false,404,'File not found');}
+ return reply.header('Cache-Control','public, max-age=31536000, immutable').type('application/json').send(bytes);
 });}

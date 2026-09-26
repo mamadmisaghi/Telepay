@@ -15,6 +15,7 @@ import {workerTick} from '../src/worker.mjs';
 async function fixture(){
  const pg=new PGlite();await pg.exec(await readFile(new URL('../migrations/001_core.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/002_bot_and_buys.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/003_atomic_market.sql',import.meta.url),'utf8'));
  const adapt=client=>({query:async(sql,args)=>{if(sql.startsWith('SELECT pg_'))return {rows:[],rowCount:1};const r=await client.query(sql,args);return {...r,rowCount:Math.max(r.affectedRows||0,r.rows.length)};}});
  const db={...adapt(pg),transaction:fn=>pg.transaction(tx=>fn(adapt(tx))),close:()=>pg.close()};
  const config=configFromEnv({PUBLIC_ORIGIN:'http://localhost:8080',TELEGRAM_CLIENT_ID:'123',TELEGRAM_CLIENT_SECRET:'test-secret',PAYOUTS_ENABLED:'true',KEY_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')});
@@ -123,15 +124,21 @@ test('official Pump create instruction builds with the intended mint, payer and 
  const ix=await PUMP_SDK.createV2Instruction({mint,creator,user,name:'Test',symbol:'TEST',uri:'https://example.test/meta.json',mayhemMode:false,holderReward:false});
  assert.equal(ix.programId.toBase58(),PUMP_PROGRAM_ID.toBase58());assert.ok(ix.keys.some(k=>k.pubkey.equals(mint)&&k.isSigner));assert.ok(ix.keys.some(k=>k.pubkey.equals(user)&&k.isSigner));assert.ok(Buffer.from(ix.data).includes(Buffer.from(creator.toBytes())));
 });
-test('launch preparation reserves a TeLe mint and stores an arbitrary recipient handle without resolving a Telegram ID',async()=>{
+test('launch preparation uses the selected handle, compact metadata and requested atomic buy amount',async()=>{
  const f=await fixture();const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
  const dir=await mkdtemp(join(tmpdir(),'telepaid-meta-'));f.config.metadataDir=dir;f.config.launchesEnabled=true;f.config.rpcUrl='http://test.invalid';
  const address='A'.repeat(40)+'TeLe';await f.db.query('INSERT INTO mint_pool(address,secret_encrypted,suffix) VALUES($1,$2,$3)',[address,'encrypted-test-only','TeLe']);
- let calls=0;const chain={prepareLaunch:async args=>{calls++;assert.equal(args.mint,address);assert.equal(args.encryptedMintSecret,'encrypted-test-only');return {message:'message',wire:'wire',lastValidHeight:100,networkFeeLamports:'5000'};}};
- const app=await buildApp({...f,chain});try{
-  const request={method:'POST',url:'/api/launches/prepare',headers:{cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2','idempotency-key':'launch-replay-test-1'},payload:{name:'Hamoon coin',symbol:'HAM',recipient:'SomeoneElse',wallet:f.wallet.publicKey.toBase58(),image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aEZkAAAAASUVORK5CYII=',initialBuyLamports:'0'}};
+ let calls=0;const chain={prepareLaunch:async args=>{calls++;assert.equal(args.mint,address);assert.equal(args.encryptedMintSecret,'encrypted-test-only');assert.equal(args.initialBuy,1000000n);assert.match(args.uri,/\/api\/m\/[\w-]{22}$/);return {message:'message',wire:'wire',lastValidHeight:100,networkFeeLamports:'5000'};}};
+ const app=await buildApp({...f,chain,fetcher:async()=>({ok:true,text:async()=>'<div class="tgme_page_title">Someone</div><div class="tgme_page_extra">@someoneelse</div><a>Send Message</a>'})});try{
+  const request={method:'POST',url:'/api/launches/prepare',headers:{cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2','idempotency-key':'launch-replay-test-1'},payload:{name:'Hamoon coin',symbol:'HAM',recipient:'SomeoneElse',wallet:f.wallet.publicKey.toBase58(),image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aEZkAAAAASUVORK5CYII=',initialBuyLamports:'1000000'}};
+  const rejected=await app.inject({...request,payload:{...request.payload,recipient:'unknownuser'}});assert.equal(rejected.statusCode,422);assert.equal(calls,0);
   const result=await app.inject(request);assert.equal(result.statusCode,200,result.body);assert.equal(result.json().recipientHandle,'someoneelse');assert.equal(result.json().mint,address);
-  assert.equal((await app.inject(request)).json().id,result.json().id);assert.equal(calls,1);
+  assert.equal((await app.inject(request)).json().id,result.json().id);assert.equal(calls,1);assert.equal(result.json().launchFormat,'atomic-v1');
+  const row=(await f.db.query('SELECT * FROM launches WHERE id=$1',[result.json().id])).rows[0];
+  const metadata=await app.inject(new URL(row.metadata_uri).pathname);assert.equal(metadata.statusCode,200);assert.equal(metadata.json().extensions.telepaid.recipient,'someoneelse');
+  assert.match(metadata.headers['cache-control'],/immutable/);
+  await f.db.query("UPDATE launches SET launch_format='legacy' WHERE id=$1",[row.id]);
+  const outdated=await app.inject({method:'POST',url:`/api/launches/${row.id}/submit`,headers:request.headers,payload:{transaction:'invalid'}});assert.equal(outdated.statusCode,409);assert.match(outdated.json().error,/Refresh/);
   const refresh=await app.inject({method:'POST',url:`/api/launches/${result.json().id}/refresh`,headers:request.headers,payload:{}});assert.equal(refresh.statusCode,200,refresh.body);assert.equal(refresh.json().mint,address);assert.equal(calls,2);
   const {rows:[pool]}=await f.db.query('SELECT status FROM mint_pool WHERE address=$1',[address]);assert.equal(pool.status,'reserved');
   const users=await f.db.query("SELECT id FROM users WHERE username='someoneelse'");assert.equal(users.rowCount,0);
@@ -255,26 +262,15 @@ test('bot login binds wallet signature, browser and fresh Telegram callback; rep
  }finally{await app.close();await f.db.close();}
 });
 
-test('initial buy signs separately, persists once and reconciles through the worker',async()=>{
+test('split initial buy endpoints are retired while submitted legacy buys still reconcile',async()=>{
  const f=await fixture();f.config.launchesEnabled=true;
- const wallet=f.wallet,address=wallet.publicKey.toBase58();
- await f.db.query("UPDATE launches SET owner_id='2',initial_buy='0' WHERE id='launch1'");
- let preparedCount=0,sendCount=0;
- const tx=new VersionedTransaction(new TransactionMessage({payerKey:wallet.publicKey,recentBlockhash:Keypair.generate().publicKey.toBase58(),instructions:[SystemProgram.transfer({fromPubkey:wallet.publicKey,toPubkey:Keypair.generate().publicKey,lamports:1000000})]}).compileToV0Message());
- const chain={prepareBuy:async input=>{preparedCount++;assert.equal(input.initialBuy,1000000n);return {wire:Buffer.from(tx.serialize()).toString('base64'),message:Buffer.from(tx.message.serialize()).toString('base64'),lastValidHeight:100};},connection:{getBlockHeight:async()=>50},send:async()=>{sendCount++;},status:async()=>({state:'confirmed'})};
- const app=await buildApp({...f,chain});const headers={cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2'};
+ await f.db.query("UPDATE launches SET owner_id='2' WHERE id='launch1'");
+ const chain={status:async()=>({state:'confirmed'})};const app=await buildApp({...f,chain});
+ const headers={cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2'};
  try{
-  const denied=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers:{...headers,cookie:'tp_session=session1','x-csrf-token':'csrf1'},payload:{amountLamports:'1000000'}});assert.equal(denied.statusCode,404);
-  const zero=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'0'}});assert.equal(zero.statusCode,400);
-  const quote=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'1000000'}});assert.equal(quote.statusCode,200,quote.body);
-  await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{}});assert.equal(preparedCount,1);
-  const changed=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'2000000'}});assert.equal(changed.statusCode,409);
-  tx.sign([wallet]);const payload={transaction:Buffer.from(tx.serialize()).toString('base64')};
-  const submit=await app.inject({method:'POST',url:'/api/launches/launch1/buy/submit',headers,payload});assert.equal(submit.statusCode,200,submit.body);assert.equal(submit.json().status,'submitted');
-  const repeat=await app.inject({method:'POST',url:'/api/launches/launch1/buy/submit',headers,payload});assert.equal(repeat.json().signature,submit.json().signature);assert.equal(sendCount,2);
-  await workerTick({...f,chain});
-  const row=(await app.inject({url:'/api/launches/launch1',headers})).json();assert.equal(row.status,'confirmed');assert.equal(row.buy.status,'confirmed');assert.equal(row.initialBuyLamports,'1000000');
-  const again=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'2000000'}});assert.equal(again.statusCode,409);assert.equal(preparedCount,1);
+  for(const action of ['prepare','submit'])assert.equal((await app.inject({method:'POST',url:`/api/launches/launch1/buy/${action}`,headers,payload:{}})).statusCode,410);
+  await f.db.query("INSERT INTO launch_buys(launch_id,status,message_base64,transaction_base64,last_valid_height,signature) VALUES('launch1','submitted','old','old',100,'old-signature')");
+  await workerTick({...f,chain});assert.equal((await f.db.query("SELECT status FROM launch_buys WHERE launch_id='launch1'")).rows[0].status,'confirmed');
  }finally{await app.close();await f.db.close();}
 });
 
@@ -323,4 +319,61 @@ test('public Telegram preview only recognizes matching contact profiles, not gen
  assert.equal(parsePublicProfile(page,'hamoon').name,'A & B');assert.ok(parsePublicProfile(page,'hamoon').photo.startsWith('https://cdn4.telesco.pe/'));
  assert.equal(parsePublicProfile(page,'other'),null);assert.equal(parsePublicProfile(page.replace('Send Message','View Channel'),'hamoon'),null);assert.equal(parsePublicProfile('<a>Send Message</a>','hamoon'),null);
  assert.equal(parsePublicProfile(page.replace('https://cdn4.telesco.pe/file/photo.jpg','https://evil.example/photo.jpg'),'hamoon').photo,null);
+});
+
+test('atomic launch preserves both instructions and the mint signature within the packet limit; failure never becomes create-only',async()=>{
+ const {chainService}=await import('../src/chain.mjs');const {PUMP_SDK}=await import('@pump-fun/pump-sdk');
+ const snapshots=JSON.parse(await readFile(new URL('./fixtures/pump-public-accounts.json',import.meta.url),'utf8'));
+ const mint=Keypair.generate(),payer=Keypair.generate(),creator=Keypair.generate(),encryptionKey=Buffer.alloc(32,9).toString('base64');
+ const chain=chainService({rpcUrl:'https://unused.invalid',cluster:'mainnet-beta',encryptionKey});
+ chain.connection.getGenesisHash=async()=> '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+ chain.connection.getLatestBlockhash=async()=>({blockhash:Keypair.generate().publicKey.toBase58(),lastValidBlockHeight:200});
+ let simulations=0;
+ chain.connection.simulateTransaction=async()=>{simulations++;return {value:{err:simulations>1?{InstructionError:[2,'InsufficientFunds']}:null}}};
+ chain.connection.getFeeForMessage=async()=>({value:10000});
+ chain.sdk.fetchGlobal=async()=>PUMP_SDK.decodeGlobal({data:Buffer.from(snapshots.global,'base64')});
+ chain.sdk.fetchFeeConfig=async()=>PUMP_SDK.decodeFeeConfig({data:Buffer.from(snapshots.fee,'base64')});
+ const args={mint:mint.publicKey.toBase58(),creator:creator.publicKey.toBase58(),wallet:payer.publicKey.toBase58(),name:'A'.repeat(32),symbol:'A'.repeat(10),uri:'https://telepaid-production.up.railway.app/api/m/'+'a'.repeat(22),initialBuy:1000000n,encryptedMintSecret:encrypt(mint.secretKey,encryptionKey,`mint:${mint.publicKey.toBase58()}`)};
+ const prepared=await chain.prepareLaunch(args),tx=VersionedTransaction.deserialize(Buffer.from(prepared.wire,'base64'));
+ assert.ok(tx.serialize().length<=1232);assert.equal(tx.message.compiledInstructions.length,3);
+ const index=tx.message.staticAccountKeys.findIndex(k=>k.equals(mint.publicKey));assert.ok(nacl.sign.detached.verify(tx.message.serialize(),tx.signatures[index],mint.publicKey.toBytes()));
+ assert.ok(tx.signatures[0].every(b=>b===0));
+ await assert.rejects(chain.prepareLaunch(args),/Launch simulation failed/);assert.equal(simulations,2);
+ await assert.rejects(chain.prepareLaunch({...args,name:'🍑'.repeat(20)}),/32 UTF-8 bytes/);
+});
+
+test('real Pump simulation events decode and cannot be spoofed by another program or a failed transaction',async()=>{
+ const {parseTrades,candleSeries}=await import('../src/market.mjs');
+ const fixture=JSON.parse(await readFile(new URL('./fixtures/atomic-simulation.json',import.meta.url),'utf8'));
+ const trades=parseTrades(fixture,fixture.mint,fixture.signature);assert.equal(trades.length,1);assert.equal(trades[0].side,'buy');assert.ok(BigInt(trades[0].solLamports)>0n);
+ assert.deepEqual(parseTrades({...fixture,meta:{...fixture.meta,err:{InstructionError:[2,'failed']}}},fixture.mint,fixture.signature),[]);
+ assert.deepEqual(parseTrades(fixture,Keypair.generate().publicKey.toBase58(),fixture.signature),[]);
+ const forged={...fixture,meta:{...fixture.meta,logMessages:['Program 11111111111111111111111111111111 invoke [1]',...fixture.meta.logMessages.filter(l=>l.startsWith('Program data:')),'Program 11111111111111111111111111111111 success']}};
+ assert.deepEqual(parseTrades(forged,fixture.mint,fixture.signature),[]);
+ const candles=candleSeries([{...trades[0],time:120,priceSol:2},{...trades[0],time:160,priceSol:4},{...trades[0],time:240,priceSol:3}],60);
+ assert.equal(candles.length,2);assert.deepEqual([candles[0].open,candles[0].high,candles[0].low,candles[0].close],[2,4,2,4]);assert.equal(candles[1].time,240);assert.equal(candles[0].trades,2);
+});
+
+test('market indexing persists actual trades once, excludes failures and reports the live curve price',async()=>{
+ const f=await fixture();const {marketService}=await import('../src/market.mjs');const snapshot=JSON.parse(await readFile(new URL('./fixtures/atomic-simulation.json',import.meta.url),'utf8'));
+ try{
+  const token={id:'launch1',mint:snapshot.mint};let fetches=0;
+  const chain={checkNetwork:async()=>{},sdk:{fetchBondingCurve:async()=>({complete:false,virtualQuoteReserves:30000000000n,virtualTokenReserves:1000000000000000n})},connection:{getSignaturesForAddress:async()=>[{signature:snapshot.signature,err:null}],getTransaction:async()=>{fetches++;return snapshot;}}};
+  const service=marketService({db:f.db,chain});const first=await service.load(token,60);assert.equal(first.trades.length,1);assert.ok(first.spotPriceSol>0);assert.equal(first.stale,false);
+  const second=await service.load(token,300);assert.equal(second.trades.length,1);assert.equal(fetches,1);
+  await marketService({db:f.db,chain}).load(token,60);assert.equal(fetches,1);assert.equal((await f.db.query('SELECT * FROM market_trades')).rowCount,1);
+ }finally{await f.db.close();}
+});
+
+test('recipient directory opt-in reveals a real profile without granting authentication or claim proof',async()=>{
+ const f=await fixture();Object.assign(f.config,{telegramBotToken:'test-bot',telegramWebhookSecret:'test-webhook'});
+ const fetcher=async(url)=>({ok:true,json:async()=>({ok:true,result:String(url).endsWith('/getChat')?{type:'private',username:'newrecipient',first_name:'New recipient'}:{}}),text:async()=>''});
+ const app=await buildApp({...f,chain:{},fetcher});try{
+  const update={message:{from:{id:123,username:'newrecipient',first_name:'New recipient'},chat:{id:123,type:'private'},text:'/start recipient'}};
+  assert.equal((await app.inject({method:'POST',url:'/api/telegram/webhook',payload:update})).statusCode,401);
+  const headers={'x-telegram-bot-api-secret-token':'test-webhook'};assert.equal((await app.inject({method:'POST',url:'/api/telegram/webhook',headers,payload:update})).statusCode,200);
+  const result=(await app.inject('/api/public/recipients?q=newrecipient&refresh=1')).json();assert.equal(result.results[0].name,'New recipient');
+  assert.equal((await f.db.query("SELECT * FROM users WHERE id='123'")).rowCount,0);assert.equal((await f.db.query("SELECT * FROM sessions WHERE user_id='123'")).rowCount,0);
+  await app.inject({method:'POST',url:'/api/telegram/webhook',headers,payload:{message:{...update.message,text:'/remove'}}});assert.equal((await f.db.query('SELECT * FROM telegram_directory')).rowCount,0);
+ }finally{await app.close();await f.db.close();}
 });

@@ -1,5 +1,7 @@
 # Railway verification — 2026-09-26
 
+Historical report: the later atomic-launch release in `ATOMIC_MARKET_REPORT.md` supersedes the separate initial-buy implementation described below.
+
 Runtime commit: `e095ae2ea5fac682404b164d8f37b28d262730af`.
 URL: https://telepaid-production.up.railway.app
 

@@ -29,25 +29,35 @@ export function chainService(config) {
   const expected={'mainnet-beta':'5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d','devnet':'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG'}[config.cluster];
   need(expected&&genesis===expected,503,'RPC network does not match the configured network');checked=true;
  }
- async function build(instructions,payer,signers=[]) {
+ async function build(instructions,payer,signers=[],compact=false) {
   await checkNetwork();const latest=await connection.getLatestBlockhash('confirmed');
-  const tx=new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:latest.blockhash,instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:400000}),...instructions]}).compileToV0Message());
+  const tx=new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:latest.blockhash,instructions:compact?instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:400000}),...instructions]}).compileToV0Message());
   if(signers.length)tx.sign(signers);
-  need(tx.serialize().length<=1232,422,'Transaction exceeds the Solana packet limit');
+  let size;try{size=tx.serialize().length;}catch{need(false,422,'Launch transaction is too large. Shorten the token name and retry');}
+  need(size<=1232,422,'Launch transaction is too large. Shorten the token name and retry');
   return {tx,lastValidHeight:latest.lastValidBlockHeight,wire:Buffer.from(tx.serialize()).toString('base64'),message:Buffer.from(tx.message.serialize()).toString('base64')};
  }
  return {
   connection,sdk,checkNetwork,
   async prepareLaunch({mint,creator,wallet,name,symbol,uri,initialBuy,encryptedMintSecret}) {
    const args={mint:new PublicKey(mint),creator:new PublicKey(creator),user:new PublicKey(wallet),name,symbol,uri,mayhemMode:false,holderReward:false};
-   // Creation and optional buy are separate wallet approvals to stay under Solana's 1232-byte limit.
-   const instructions=[await PUMP_SDK.createV2Instruction(args)];
+   await checkNetwork();
+   need(Buffer.byteLength(name,'utf8')<=32,400,'Token name must fit within 32 UTF-8 bytes');
+   let instructions;
+   if(initialBuy>0n){
+    const [global,feeConfig]=await Promise.all([sdk.fetchGlobal(),sdk.fetchFeeConfig()]);
+    const solAmount=new BN(initialBuy.toString());
+    // Null state marks a new curve and includes the creator fee in the quote.
+    const amount=getBuyTokenAmountFromSolAmount({global,feeConfig,mintSupply:null,bondingCurve:null,amount:solAmount,quoteMint:PublicKey.default});
+    need(amount.gtn(0),400,'Initial buy is too small');
+    instructions=await PUMP_SDK.createV2AndBuyInstructions({...args,global,solAmount,amount});
+   }else instructions=[await PUMP_SDK.createV2Instruction(args)];
    // Preserve the exact server-prepared message through external wallets. The mint
    // co-signature is present before Phantom signs, so the wallet cannot rewrite
    // the transaction without invalidating it. The payer still must approve/sign.
    const mintSigner=encryptedMintSecret?Keypair.fromSecretKey(decrypt(encryptedMintSecret,config.encryptionKey,`mint:${mint}`)):null;
    need(!mintSigner||mintSigner.publicKey.equals(args.mint),500,'Mint signer mismatch');
-   const prepared=await build(instructions,args.user,mintSigner?[mintSigner]:[]);
+   const prepared=await build(instructions,args.user,mintSigner?[mintSigner]:[],initialBuy>0n);
    const simulation=await connection.simulateTransaction(prepared.tx,{sigVerify:false,commitment:'confirmed'});
    need(!simulation.value.err,422,'Launch simulation failed. Check your wallet balance and try again');
    const fee=await connection.getFeeForMessage(prepared.tx.message,'confirmed');

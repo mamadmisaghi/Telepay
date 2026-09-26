@@ -5,9 +5,10 @@ import helmet from '@fastify/helmet';
 import fastifyStatic from '@fastify/static';
 import {botAuthRoutes,launcherFor} from './bot-auth.mjs';
 import {authRoutes,sessionFor} from './auth.mjs';
+import {marketRoutes} from './market.mjs';
 import {recipientRoutes} from './recipients.mjs';
 import {launchRoutes} from './launches.mjs';
-import {metadataRoutes} from './metadata.mjs';
+import {metadataRoutes,compactMetadataRoutes} from './metadata.mjs';
 import {reserveClaim,normalizeHandle} from './ledger.mjs';
 import {readiness} from './config.mjs';
 import {equal} from './crypto.mjs';
@@ -25,9 +26,9 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  app.addHook('onRequest',async(req,reply)=>{
   // Public static files never bypass authentication for /api routes.
   if(config.staticDir&&!req.url.split('?')[0].startsWith('/api/')&&['GET','HEAD'].includes(req.method))return;
-  if(!req.url.startsWith('/api/metadata/'))reply.header('Cache-Control','no-store');
+  if(!req.url.startsWith('/api/metadata/')&&!req.url.startsWith('/api/m/'))reply.header('Cache-Control','no-store');
   const path=req.url.split('?')[0];
-  const publicGet=req.method==='GET'&&(path==='/api/health'||path==='/api/runtime'||path==='/api/session'||path.startsWith('/api/auth/telegram')||path.startsWith('/api/public/')||path.startsWith('/api/metadata/'));
+  const publicGet=req.method==='GET'&&(path==='/api/health'||path==='/api/runtime'||path==='/api/session'||path.startsWith('/api/auth/telegram')||path.startsWith('/api/public/')||path.startsWith('/api/metadata/')||path.startsWith('/api/m/'));
   if(publicGet||req.method==='GET'&&path==='/api/auth/wallet/session')return;
   if(req.method==='POST'&&path==='/api/telegram/webhook')return;
   if(req.method==='POST'&&['/api/auth/wallet/start','/api/auth/wallet/finish','/api/auth/bot/start','/api/auth/bot/finish'].includes(path)){need(req.headers.origin===config.origin,403,'Request origin did not match');return;}
@@ -40,7 +41,7 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  });
  app.get('/api/health',async()=>{await db.query('SELECT 1');return {ok:true};});
  app.get('/api/runtime',async()=>({...readiness(config),minimumClaimLamports:config.minimumClaim.toString()}));
- botAuthRoutes(app,{db,config,fetcher});authRoutes(app,{db,config,verifyIdentity,fetcher});launchRoutes(app,{db,config,chain});metadataRoutes(app,config);recipientRoutes(app,{db,config,fetcher});
+ botAuthRoutes(app,{db,config,fetcher});authRoutes(app,{db,config,verifyIdentity,fetcher});const recipients=recipientRoutes(app,{db,config,fetcher});launchRoutes(app,{db,config,chain,resolveRecipient:recipients.find});metadataRoutes(app,config);compactMetadataRoutes(app,config);marketRoutes(app,{db,chain});
  app.get('/api/public/tokens',async req=>{
   const search=String(req.query.q||'').slice(0,80),offset=Math.max(0,Math.min(100000,Number(req.query.offset)||0));
   const {rows}=await db.query("SELECT l.id,l.mint,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,'0') AS earned_lamports,COALESCE(f.gross,'0') AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND (l.name ILIKE $1 OR l.symbol ILIKE $1 OR l.recipient_handle ILIKE $1) ORDER BY l.confirmed_at DESC LIMIT 48 OFFSET $2",[`%${search}%`,offset]);return {tokens:rows};

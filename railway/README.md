@@ -39,8 +39,17 @@ connects the existing dialogs to the API. Do not switch to the old LiveApp layou
   browser. Each claim needs a proof younger than two minutes; its time begins at
   Telegram confirmation, not when the browser polls. No username-to-ID lookup is
   required at creation.
-- Create and optional initial buy have separate wallet approvals. A 1% slippage
-  allowance applies to the buy. The same launch/mint resumes after expiration.
+- Creation and the requested developer buy share one atomic transaction and one
+  wallet approval (up to 1% buy slippage). Compact immutable metadata keeps the
+  packet within 1232 bytes. Failed buys cannot leave a create-only launch.
+  Legacy prepared quotes must be refreshed; previously submitted buys still reconcile.
+- Token pages index real finalized Pump/PumpSwap trades and display prices in SOL.
+  Recent RPC history is indexed on demand, at most 12 unseen transactions per poll;
+  this is not an exhaustive historical indexer. No trades are invented for empty markets.
+- Recipient selection requires a confirmed exact Telegram profile on both client
+  and server. Public profiles and bot-opted-in accounts are supported. Starting
+  TelePayFunBot with `recipient` makes an account discoverable but grants no claim
+  proof. Full Telegram-wide search requires separate authorized MTProto user access.
 - The worker reconciles finalized create/buy/collection/sweep/claim transactions.
   Allocations are credited only after the treasury actually receives the sweep.
 - Fresh mainnet treasury and gas-payer keys are stored in Railway Variables;

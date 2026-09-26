@@ -71,6 +71,19 @@ export function botAuthRoutes(app,{db,config,fetcher=fetch}){
   need(config.telegramWebhookSecret&&equal(req.headers['x-telegram-bot-api-secret-token'],config.telegramWebhookSecret),401,'Invalid webhook');
   const update=req.body||{},message=update.message,callback=update.callback_query;
   if(message?.chat?.type==='private'&&message.from?.id===message.chat.id){
+   // Explicit opt-in to public recipient discovery; this grants no claim proof or session.
+   if(/^\/start(?:@\w+)?(?:\s+recipient)?$/.test(message.text||'')&&!message.from.is_bot){
+    const handle=String(message.from.username||'').toLowerCase();
+    if(/^[a-z][a-z0-9_]{3,31}$/.test(handle)){
+     await db.query('INSERT INTO telegram_directory(id,handle) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET handle=EXCLUDED.handle,updated_at=now()',[String(message.from.id),handle]);
+     await bot('sendMessage',{chat_id:message.chat.id,text:`@${handle} can now be found as a TelePaid fee recipient. Return to the launch form and retry the username lookup.\n\nThis does not connect a wallet or authorize claims. Claim verification is separate.\nSend /remove to remove your account from recipient suggestions.`});
+    }else await bot('sendMessage',{chat_id:message.chat.id,text:'Set a public Telegram username in Settings, then press Start again.'});
+    return {ok:true};
+   }
+   if(/^\/remove(?:@\w+)?$/.test(message.text||'')){
+    await db.query('DELETE FROM telegram_directory WHERE id=$1',[String(message.from.id)]);
+    await bot('sendMessage',{chat_id:message.chat.id,text:'Removed from TelePaid recipient suggestions. Existing fee allocations and public Telegram profiles are unchanged.'});return {ok:true};
+   }
    const id=/^\/start(?:@\w+)?\s+([a-f0-9-]{36})$/.exec(message.text||'')?.[1];
    if(!id)return {ok:true};
    const r=(await db.query("SELECT * FROM login_requests WHERE id=$1 AND kind='telegram' AND expires_at>now() AND verified_at IS NULL",[id])).rows[0];

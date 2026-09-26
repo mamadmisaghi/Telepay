@@ -1,7 +1,8 @@
 'use client';
 import {useEffect,useState} from 'react';
 import {ArrowLeft,ArrowUpRight,ExternalLink,Send} from 'lucide-react';
-import {request,asSOL,InitialBuyAction,TransactionLink,usePlatform} from './platform-actions';
+import {request,asSOL,TransactionLink,usePlatform} from './platform-actions';
+import {TokenMarket} from './token-market';
 import type {PublicToken} from '@/app/data';
 
 export function LiveTokenDetail({id,go,onVerify}:{id:string;go:(route:string)=>void;onVerify:()=>void}){
@@ -11,9 +12,8 @@ export function LiveTokenDetail({id,go,onVerify}:{id:string;go:(route:string)=>v
  const project=(BigInt(token.collected_lamports)-BigInt(token.earned_lamports)).toString();
  return <div className="page-content"><button className="back-link" onClick={()=>go('explore')}><ArrowLeft size={16}/> All tokens</button>
  <div className="token-detail-head"><img src={token.image_uri} className="detail-art" alt={token.name}/><div><h1>{token.name} <span>{token.symbol}</span></h1><p><span className="pump-tag"><span className="pump-pill"/> Pump</span><span>Solana · {runtime?.cluster==='devnet'?'Devnet':'Mainnet'}</span><span>Created {new Date(token.confirmed_at).toLocaleString()}</span></p><button className="text-link" onClick={()=>go('account/'+token.recipient_handle)}><Send size={15}/> Fees for @{token.recipient_handle} <ArrowUpRight size={14}/></button></div><a className="btn outline" href={`https://pump.fun/coin/${token.mint}`} target="_blank" rel="noreferrer"><ExternalLink size={15}/> View on Pump</a></div>
- <InitialBuyAction key={id} id={id} ownerWallet={token.launcher_wallet}/>
  <div className="data-note"><span className="status-tag">Live token</span> Finalized on Solana · Earnings below are received fees, not estimates.</div>
- <div className="token-detail-grid"><div className="detail-chart"><div><h2>{token.symbol}</h2><span>Token details</span></div><div className="live-token-facts"><p>{token.description||`A token supporting @${token.recipient_handle} on Telegram.`}</p><dl><div><dt>Mint address</dt><dd className="live-address">{token.mint}</dd></div><div><dt>Launch transaction</dt><dd><TransactionLink signature={token.signature} cluster={runtime?.cluster}/></dd></div><div><dt>Market data</dt><dd>Price and trade history are not connected yet.</dd></div></dl></div><div className="detail-description">80% of creator fees received from {token.name} are attributed to @{token.recipient_handle}. The current username owner can claim after Telegram verification.</div></div>
+ <div className="token-detail-grid"><div className="detail-chart"><TokenMarket key={id} id={id} symbol={token.symbol}/><div className="live-token-facts"><p>{token.description||`A token supporting @${token.recipient_handle} on Telegram.`}</p><dl><div><dt>Mint address</dt><dd className="live-address">{token.mint}</dd></div><div><dt>Launch transaction</dt><dd><TransactionLink signature={token.signature} cluster={runtime?.cluster}/></dd></div></dl></div><div className="detail-description">80% of creator fees received from {token.name} are attributed to @{token.recipient_handle}. The current username owner can claim after Telegram verification.</div></div>
  <div className="earnings-panel"><span>CREATOR EARNINGS</span><strong>{asSOL(token.earned_lamports)} <small>SOL</small></strong><dl><div><dt>Total collected</dt><dd>{asSOL(token.collected_lamports)} SOL</dd></div><div><dt>Project share · 20%</dt><dd>{asSOL(project)} SOL</dd></div><div><dt>Recipient share</dt><dd>80%</dd></div><div><dt>Mint suffix</dt><dd>TeLe</dd></div></dl><button className="btn white full" onClick={onVerify}><Send size={16}/> Verify & claim</button><p>Claims combine the fees assigned to this username across its tokens.</p></div></div>
  <div className="section-head"><h2>Recipient</h2></div><button className="live-recipient" onClick={()=>go('account/'+token.recipient_handle)}><Send size={24}/><span><strong>@{token.recipient_handle}</strong><small>View account fees and tokens</small></span><ArrowUpRight size={18}/></button></div>;
 }

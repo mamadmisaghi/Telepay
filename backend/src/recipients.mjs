@@ -11,13 +11,15 @@ export function parsePublicProfile(html,handle){
  let photo=null;try{const url=new URL(clean(raw||''));if(url.protocol==='https:'&&/^(?:cdn\d*\.telesco\.pe|(?:[a-z0-9-]+\.)?telegram\.org|t\.me)$/.test(url.hostname))photo=url.href;}catch{}
  return {handle,name:clean(title).slice(0,100),photo,source:'public_profile',status:'found'};
 }
+export const normalizeRecipient=value=>String(value||'').trim().replace(/^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me)\//i,'').replace(/^@/,'').replace(/\/$/,'').toLowerCase();
 export function recipientRoutes(app,{db,config,fetcher=fetch}){
  const cache=new Map(),pending=new Map();
  async function bot(method,body){
   const r=await fetcher(`https://api.telegram.org/bot${config.telegramBotToken}/${method}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(5000)});
   const j=await r.json();if(!r.ok||!j.ok)return null;return j.result;
  }
- async function find(handle){
+ async function find(handle,{refresh=false}={}){
+  if(refresh)cache.delete(handle);
   const cached=cache.get(handle);if(cached&&cached.expires>Date.now())return cached.value;
   if(pending.has(handle))return pending.get(handle);
   const job=(async()=>{
@@ -25,7 +27,7 @@ export function recipientRoutes(app,{db,config,fetcher=fetch}){
    // Existing IDs are only an API lookup hint. Always compare today's username;
    // they never become the fee beneficiary or prove future ownership.
    if(config.telegramBotToken){
-    const {rows}=await db.query('SELECT id FROM users WHERE lower(username)=$1 ORDER BY verified_at DESC NULLS LAST LIMIT 3',[handle]);
+    const {rows}=await db.query('SELECT id FROM telegram_directory WHERE handle=$1 UNION SELECT id FROM users WHERE lower(username)=$1 LIMIT 6',[handle]);
     for(const row of rows){if(!/^\d+$/.test(row.id))continue;
      try{const chat=await bot('getChat',{chat_id:row.id});if(chat?.type!=='private'||chat.username?.toLowerCase()!==handle)continue;
       let photo=null;
@@ -42,9 +44,10 @@ export function recipientRoutes(app,{db,config,fetcher=fetch}){
   })();pending.set(handle,job);try{return await job}finally{pending.delete(handle)}
  }
  app.get('/api/public/recipients',{config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{
-  const q=String(req.query.q||'').trim().replace(/^@/,'').toLowerCase();need(/^[a-z][a-z0-9_]{2,31}$/.test(q),400,'Enter at least 3 username characters');
-  const {rows}=await db.query("SELECT DISTINCT recipient_handle AS handle FROM launches WHERE status='confirmed' AND starts_with(recipient_handle,$1) ORDER BY recipient_handle LIMIT 4",[q]);
+  const q=normalizeRecipient(req.query.q);need(/^[a-z][a-z0-9_]{2,31}$/.test(q),400,'Enter at least 3 username characters');
+  const {rows}=await db.query("SELECT recipient_handle AS handle FROM launches WHERE status='confirmed' AND starts_with(recipient_handle,$1) UNION SELECT handle FROM telegram_directory WHERE starts_with(handle,$1) ORDER BY handle LIMIT 6",[q]);
   const handles=[...new Set([...(validHandle.test(q)?[q]:[]),...rows.map(r=>r.handle)])];
-  const result=await Promise.all(handles.map(find));return {results:result.filter(r=>r.status==='found'),exactStatus:result.find(r=>r.handle===q)?.status||'incomplete',scope:'exact_and_public_recipients'};
+  const result=await Promise.all(handles.map(handle=>find(handle,{refresh:req.query.refresh==='1'})));return {results:result.filter(r=>r.status==='found'),exactStatus:result.find(r=>r.handle===q)?.status||'incomplete',scope:'exact_and_opted_in_recipients'};
  });
+ return {find};
 }
