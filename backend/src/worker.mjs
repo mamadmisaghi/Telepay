@@ -123,11 +123,23 @@ export async function workerTick({db,config,chain}) {
 if(import.meta.url===`file://${process.argv[1]}`){
  const config=configFromEnv(),db=database(config.databaseUrl),chain=chainService(config);let stop=false;for(const s of ['SIGTERM','SIGINT'])process.on(s,()=>{stop=true;});
  const markets=marketService({db,chain,config}),refill=mintRefill({db,chain,config});let marketAt=0,healthAt=0;
+ // Watch the reserved project mint while it is unlaunched. The regular worker
+ // remains on its 10-second schedule so fee collection is not polled faster.
+ let officialBusy=false;
+ const officialTimer=config.rpcUrl?setInterval(()=>{
+  if(stop||officialBusy)return;
+  officialBusy=true;
+  void db.query("SELECT 1 FROM official_mints WHERE status='waiting' LIMIT 1")
+   .then(({rowCount})=>rowCount?db.workerLock(()=>syncOfficialMints({db,chain})):undefined)
+   .catch(e=>console.error(JSON.stringify({event:'official_watch_retry',code:e.code||e.name})))
+   .finally(()=>{officialBusy=false});
+ },2000):null;
  while(!stop){try{await db.workerLock(async()=>{
   try{await workerTick({db,config,chain});}catch(e){console.error(JSON.stringify({event:'worker_error',code:e.code||e.name}));}
   if(Date.now()-marketAt>15000){marketAt=Date.now();await marketBatch({db,markets});}
   if(Date.now()-healthAt>60000){healthAt=Date.now();try{await operationalCheck({db,chain,config});}catch{console.error(JSON.stringify({event:'operations_check_failed'}));}}
   refill.kick();
  });}catch(e){console.error(JSON.stringify({event:'worker_error',code:e.code||e.name}));}if(!stop)await new Promise(r=>setTimeout(r,10000));}
+ if(officialTimer)clearInterval(officialTimer);
  await refill.stop();await db.close();
 }
