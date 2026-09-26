@@ -71,7 +71,7 @@ export async function syncOfficialMints({db,chain,fetcher=fetch,decodeCurve=acco
     const {rows:[token]}=await db.query('SELECT metadata_uri,image_uri FROM launches WHERE id=$1 AND source=$2',[row.launch_id,'official']);
     if(token?.image_uri===defaultArt){
      const metadata=await publicMetadata(token.metadata_uri,fetcher);
-     if(metadata?.image!==defaultArt)await db.query('UPDATE launches SET image_uri=$2,description=$3 WHERE id=$1 AND source=$4',[row.launch_id,metadata.image,metadata.description,'official']);
+     if(metadata&&metadata.image!==defaultArt)await db.query('UPDATE launches SET image_uri=$2,description=$3 WHERE id=$1 AND source=$4',[row.launch_id,metadata.image,metadata.description,'official']);
     }
     continue;
    }
