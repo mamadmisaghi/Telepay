@@ -1,0 +1,16 @@
+FROM node:24-bookworm-slim AS build
+RUN npm install -g pnpm@11.25.0
+WORKDIR /site
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN SITES_PNPM_SHARED_STORE=/pnpm-store pnpm install --frozen-lockfile
+COPY app ./app
+COPY components ./components
+COPY lib ./lib
+COPY public ./public
+COPY vendor ./vendor
+COPY vps ./vps
+COPY postcss.config.mjs tsconfig.json ./
+RUN pnpm exec vite build --config vps/vite.config.ts
+FROM caddy:2-alpine
+COPY --from=build /site/vps-dist /srv
+COPY deploy/Caddyfile /etc/caddy/Caddyfile

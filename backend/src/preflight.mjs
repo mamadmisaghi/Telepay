@@ -1,0 +1,15 @@
+import {configFromEnv} from './config.mjs';
+import {database} from './db.mjs';
+import {chainService,readKey} from './chain.mjs';
+import {encrypt,decrypt} from './crypto.mjs';
+const c=configFromEnv(),checks=[];
+const check=async(name,fn)=>{try{await fn();checks.push({name,ok:true});}catch(e){checks.push({name,ok:false,reason:e.message});}};
+await check('Privy wallet connection',()=>{if(!c.privyAppId)throw new Error('Configure the public PRIVY_APP_ID');});
+await check('Telegram credentials',()=>{if(!c.telegramClientId||!c.telegramClientSecret)throw new Error('Configure Telegram OIDC credentials in secrets');});
+await check('Encrypted key storage',()=>{const b=decrypt(encrypt(Buffer.from('check'),c.encryptionKey,'preflight'),c.encryptionKey,'preflight');if(b.toString()!=='check')throw new Error('Encryption check failed');});
+await check('Separate treasury and gas payer',()=>{if(readKey(c.treasurySecret).publicKey.equals(readKey(c.operatorSecret).publicKey))throw new Error('Treasury and gas payer must be different wallets');});
+const db=c.databaseUrl?database(c.databaseUrl):null;
+await check('Database and migrations',async()=>{if(!db)throw new Error('DATABASE_URL is missing');await db.query('SELECT count(*) FROM fee_events');});
+await check('TeLe mint pool',async()=>{if(!db)throw new Error('Database not configured');const {rows:[r]}=await db.query("SELECT count(*)::int AS count FROM mint_pool WHERE status='ready' AND suffix='TeLe'");if(!r.count)throw new Error('Run the vanity generator before opening launches');});
+await check('RPC network',()=>chainService(c).checkNetwork());
+await db?.close();console.log(JSON.stringify({ok:checks.every(x=>x.ok),checks},null,2));if(checks.some(x=>!x.ok))process.exitCode=1;

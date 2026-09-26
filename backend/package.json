@@ -1,0 +1,35 @@
+{
+  "name": "telepaid-api",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "worker": "node src/worker.mjs",
+    "migrate": "node src/migrate.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "vanity": "node src/vanity.mjs",
+    "preflight": "node src/preflight.mjs"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.2",
+    "@fastify/helmet": "13.1.1",
+    "@fastify/rate-limit": "11.2.0",
+    "@pump-fun/pump-sdk": "2.0.0",
+    "@pump-fun/pump-swap-sdk": "1.20.0",
+    "@solana/spl-token": "0.4.15",
+    "@solana/web3.js": "1.99.0",
+    "bn.js": "5.2.5",
+    "bs58": "6.0.0",
+    "fastify": "5.12.5",
+    "jose": "6.2.12",
+    "pg": "8.23.0",
+    "tweetnacl": "1.0.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
+}

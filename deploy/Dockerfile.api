@@ -1,0 +1,12 @@
+FROM node:24-bookworm-slim
+WORKDIR /srv/telepaid/backend
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY backend/src ./src
+COPY backend/migrations ./migrations
+COPY lib/domain /srv/telepaid/lib/domain
+RUN mkdir -p /srv/telepaid/data/metadata && chown -R node:node /srv/telepaid/data
+USER node
+ENV NODE_ENV=production PORT=3001 METADATA_DIR=/srv/telepaid/data/metadata
+EXPOSE 3001
+CMD ["node", "src/main.mjs"]

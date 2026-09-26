@@ -1,0 +1,81 @@
+name: telepaid
+x-api: &api
+ build:
+  context: ..
+  dockerfile: deploy/Dockerfile.api
+ env_file: runtime.env
+ volumes:
+  - metadata:/srv/telepaid/data/metadata
+  - ./secrets:/run/telepaid-secrets:ro
+ restart: unless-stopped
+ depends_on:
+  database:
+   condition: service_healthy
+ security_opt:
+  - no-new-privileges:true
+ cap_drop: [ALL]
+ logging:
+  driver: json-file
+  options:
+   max-size: 10m
+   max-file: '3'
+services:
+ database:
+  image: postgres:17-alpine
+  environment:
+   POSTGRES_DB: telepaid
+   POSTGRES_USER: telepaid
+   POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+  secrets: [database_password]
+  volumes: [postgres:/var/lib/postgresql/data]
+  restart: unless-stopped
+  healthcheck:
+   test: [CMD-SHELL, 'pg_isready -U telepaid -d telepaid']
+   interval: 10s
+   timeout: 5s
+   retries: 10
+ migrate:
+  <<: *api
+  command: [node, src/migrate.mjs]
+  restart: 'no'
+ api:
+  <<: *api
+  depends_on:
+   migrate:
+    condition: service_completed_successfully
+  healthcheck:
+   test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+   interval: 15s
+   timeout: 5s
+   retries: 5
+ worker:
+  <<: *api
+  command: [node, src/worker.mjs]
+  depends_on:
+   migrate:
+    condition: service_completed_successfully
+ vanity:
+  <<: *api
+  command: [node, src/vanity.mjs]
+  restart: 'no'
+  profiles: [maintenance]
+ web:
+  build:
+   context: ..
+   dockerfile: deploy/Dockerfile.web
+  environment:
+   DOMAIN: ${DOMAIN:?Set DOMAIN in the shell or compose env file}
+  ports: ['80:80','443:443','443:443/udp']
+  volumes: [caddy_data:/data,caddy_config:/config]
+  restart: unless-stopped
+  depends_on:
+   api:
+    condition: service_healthy
+secrets:
+ database_password:
+  file: ./secrets/database_password
+volumes:
+ postgres:
+ metadata:
+ caddy_data:
+ caddy_config:

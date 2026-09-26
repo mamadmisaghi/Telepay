@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790409040758,
+      "tag": "0000_secret_iron_fist",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790409714671,
+      "tag": "0001_magical_stick",
+      "breakpoints": true
+    }
+  ]
+}

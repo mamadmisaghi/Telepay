@@ -1,0 +1,17 @@
+{$DOMAIN} {
+ encode zstd gzip
+ header {
+  X-Content-Type-Options nosniff
+  Referrer-Policy strict-origin-when-cross-origin
+  X-Frame-Options DENY
+  Permissions-Policy "camera=(), microphone=(), geolocation=()"
+ }
+ handle /api/* {
+  reverse_proxy api:3001
+ }
+ handle {
+  root * /srv
+  try_files {path} /index.html
+  file_server
+ }
+}

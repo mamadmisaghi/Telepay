@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/.env*
+deploy/runtime.env
+deploy/secrets
+deploy/backups
+backend/data
+.sites-runtime
+.wrangler
+dist
+vps-dist

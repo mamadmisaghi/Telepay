@@ -1,0 +1,12 @@
+import {readFileSync,writeFileSync,existsSync} from 'node:fs';
+import {Keypair} from '@solana/web3.js';
+import bs58 from 'bs58';
+import {randomBytes} from 'node:crypto';
+const path='deploy/secrets/devnet-runtime.json';
+const current=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};
+const mints=readFileSync('deploy/secrets/devnet-mints.hex','utf8').trim().split('\n').map(hex=>Keypair.fromSecretKey(Buffer.from(hex,'hex')));
+for(const key of mints)if(!key.publicKey.toBase58().endsWith('TeLe'))throw new Error('Invalid suffix');
+const values={...current,DEVNET_ENABLED:'true',DEVNET_PUBLIC_ORIGIN:'https://ping-telegram-fees.gofivahootan.chatgpt.site',DEVNET_MINT_KEYS:JSON.stringify(mints.map(k=>bs58.encode(k.secretKey))),DEVNET_TREASURY_KEY:current.DEVNET_TREASURY_KEY||bs58.encode(Keypair.generate().secretKey),TELEGRAM_BOT_TOKEN:readFileSync('deploy/secrets/telegram_bot_token','utf8').trim(),TELEGRAM_BOT_USERNAME:'TelePayFunBot',TELEGRAM_WEBHOOK_SECRET:current.TELEGRAM_WEBHOOK_SECRET||randomBytes(32).toString('hex'),PRIVY_APP_ID:'cmui0gnyi01hw0cl5fe5up5ys'};
+writeFileSync(path,JSON.stringify(values),{mode:0o600});
+writeFileSync('.dev.vars',Object.entries(values).map(([key,value])=>key+'='+JSON.stringify(value)).join('\n')+'\n',{mode:0o600});
+console.log({mintPoolSize:mints.length,treasury:Keypair.fromSecretKey(bs58.decode(values.DEVNET_TREASURY_KEY)).publicKey.toBase58()});
