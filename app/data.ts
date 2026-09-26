@@ -1,5 +1,5 @@
 import { splitCreatorFees, RECIPIENT_BPS, PROJECT_BPS } from "../lib/domain/fees";
-export type Token = { id: string; name: string; symbol: string; recipient: string; image: number; marketCap: number; fees: number; collected: number; platformFees: number; claimed: number; age: string; hours: number; lastTradeSeconds: number | null };
+export type Token = { id: string; name: string; symbol: string; recipient: string; image: number; marketCap: number | null; fees: number; collected: number; platformFees: number; claimed: number; age: string; hours: number; lastTradeSeconds: number | null; live?: boolean; imageUrl?: string; mint?: string; signature?: string; description?: string; confirmedAt?: string; earnedLamports?: string; collectedLamports?: string };
 export type Profile = { id: string; name: string; handle: string; image: number; bio: string; verified: boolean };
 export const profiles: Profile[] = [
   { id:"greyroom", name:"Grey Room", handle:"greyroom", image:0, bio:"Independent ideas. Shared with the internet.", verified:true },
@@ -41,4 +41,11 @@ export const profileTokens = (id: string) => tokens.filter(t=>t.recipient===id);
 export const profileFees = (id: string) => profileTokens(id).reduce((s,t)=>s+t.fees,0);
 export const profileClaimed = (id: string) => profileTokens(id).reduce((s,t)=>s+t.claimed,0);
 
-export const sortTokens = (items: Token[], sort: string) => [...items].sort((a,b) => (sort === "recent" ? a.hours-b.hours : sort === "trade" ? (a.lastTradeSeconds ?? Infinity)-(b.lastTradeSeconds ?? Infinity) : sort === "market" ? b.marketCap-a.marketCap : b.fees-a.fees) || a.id.localeCompare(b.id));
+export const sortTokens = (items: Token[], sort: string) => [...items].sort((a,b) => (sort === "recent" ? a.hours-b.hours : sort === "trade" ? (a.lastTradeSeconds ?? Infinity)-(b.lastTradeSeconds ?? Infinity) : sort === "market" ? (b.marketCap ?? -1)-(a.marketCap ?? -1) : b.fees-a.fees) || a.id.localeCompare(b.id));
+
+export type PublicToken = {launcher_wallet?:string;id:string;mint:string;name:string;symbol:string;description?:string;image_uri:string;recipient_handle:string;confirmed_at:string;signature:string;earned_lamports:string;collected_lamports:string};
+export function fromPublicToken(row:PublicToken,now=Date.now()):Token {
+ const hours=Math.max(0,(now-Date.parse(row.confirmed_at))/3600000);
+ const earned=BigInt(row.earned_lamports||'0'),collected=BigInt(row.collected_lamports||'0');
+ return {id:row.id,name:row.name,symbol:row.symbol,recipient:row.recipient_handle,image:0,imageUrl:row.image_uri,marketCap:null,fees:Number(earned)/1e9,collected:Number(collected)/1e9,platformFees:Number(collected-earned)/1e9,claimed:0,age:hours<1?Math.max(1,Math.floor(hours*60))+'m':hours<24?Math.floor(hours)+'h':Math.floor(hours/24)+'d',hours,lastTradeSeconds:null,live:true,mint:row.mint,signature:row.signature,description:row.description,confirmedAt:row.confirmed_at,earnedLamports:earned.toString(),collectedLamports:collected.toString()};
+}

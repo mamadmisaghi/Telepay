@@ -191,6 +191,9 @@ test('public endpoints hide secrets; launch and claim switches fail closed; logo
   assert.equal((await app.inject({method:'POST',url:'/api/launches/prepare',headers,payload:{}})).statusCode,503);
   assert.equal((await app.inject({method:'POST',url:'/api/claims',headers,payload:{amount:'1000000',wallet:f.wallet.publicKey.toBase58()}})).statusCode,503);
   const tokens=(await app.inject('/api/public/tokens')).json().tokens;assert.equal(tokens.length,1);assert.equal(tokens[0].creator_secret,undefined);assert.equal(tokens[0].transaction_base64,undefined);
+  const detail=(await app.inject('/api/public/token/launch1')).json();assert.equal(detail.mint,tokens[0].mint);assert.equal(detail.recipient_handle,'hamoon');assert.equal(detail.creator_secret,undefined);
+  assert.equal((await app.inject('/api/public/token/missing')).statusCode,404);
+  const profile=(await app.inject('/api/public/profile/hamoon')).json();assert.equal(profile.tokens[0].id,'launch1');assert.equal(profile.tokens[0].collected_lamports,'0');
   assert.equal((await app.inject({method:'POST',url:'/api/auth/logout',headers})).statusCode,200);
   assert.equal((await app.inject({url:'/api/session',headers})).json().user,null);
  }finally{await app.close();await f.db.close()}
@@ -255,19 +258,23 @@ test('bot login binds wallet signature, browser and fresh Telegram callback; rep
 test('initial buy signs separately, persists once and reconciles through the worker',async()=>{
  const f=await fixture();f.config.launchesEnabled=true;
  const wallet=f.wallet,address=wallet.publicKey.toBase58();
- await f.db.query("UPDATE launches SET owner_id='2',initial_buy='1000000' WHERE id='launch1'");
+ await f.db.query("UPDATE launches SET owner_id='2',initial_buy='0' WHERE id='launch1'");
  let preparedCount=0,sendCount=0;
  const tx=new VersionedTransaction(new TransactionMessage({payerKey:wallet.publicKey,recentBlockhash:Keypair.generate().publicKey.toBase58(),instructions:[SystemProgram.transfer({fromPubkey:wallet.publicKey,toPubkey:Keypair.generate().publicKey,lamports:1000000})]}).compileToV0Message());
  const chain={prepareBuy:async input=>{preparedCount++;assert.equal(input.initialBuy,1000000n);return {wire:Buffer.from(tx.serialize()).toString('base64'),message:Buffer.from(tx.message.serialize()).toString('base64'),lastValidHeight:100};},connection:{getBlockHeight:async()=>50},send:async()=>{sendCount++;},status:async()=>({state:'confirmed'})};
  const app=await buildApp({...f,chain});const headers={cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2'};
  try{
-  const quote=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{}});assert.equal(quote.statusCode,200,quote.body);
+  const denied=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers:{...headers,cookie:'tp_session=session1','x-csrf-token':'csrf1'},payload:{amountLamports:'1000000'}});assert.equal(denied.statusCode,404);
+  const zero=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'0'}});assert.equal(zero.statusCode,400);
+  const quote=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'1000000'}});assert.equal(quote.statusCode,200,quote.body);
   await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{}});assert.equal(preparedCount,1);
+  const changed=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'2000000'}});assert.equal(changed.statusCode,409);
   tx.sign([wallet]);const payload={transaction:Buffer.from(tx.serialize()).toString('base64')};
   const submit=await app.inject({method:'POST',url:'/api/launches/launch1/buy/submit',headers,payload});assert.equal(submit.statusCode,200,submit.body);assert.equal(submit.json().status,'submitted');
   const repeat=await app.inject({method:'POST',url:'/api/launches/launch1/buy/submit',headers,payload});assert.equal(repeat.json().signature,submit.json().signature);assert.equal(sendCount,2);
   await workerTick({...f,chain});
-  const row=(await app.inject({url:'/api/launches/launch1',headers})).json();assert.equal(row.status,'confirmed');assert.equal(row.buy.status,'confirmed');
+  const row=(await app.inject({url:'/api/launches/launch1',headers})).json();assert.equal(row.status,'confirmed');assert.equal(row.buy.status,'confirmed');assert.equal(row.initialBuyLamports,'1000000');
+  const again=await app.inject({method:'POST',url:'/api/launches/launch1/buy/prepare',headers,payload:{amountLamports:'2000000'}});assert.equal(again.statusCode,409);assert.equal(preparedCount,1);
  }finally{await app.close();await f.db.close();}
 });
 
@@ -293,4 +300,27 @@ test('creation is mint co-signed before wallet approval and keeps exact-message 
   assert.throws(()=>signedMatches(Buffer.from(tx.serialize()).toString('base64'),prepared.message,args.wallet),/transaction was changed/);
  }
  await assert.rejects(chain.prepareLaunch({...args,encryptedMintSecret:encrypt(creator.secretKey,encryptionKey,`mint:${args.mint}`)}),/Mint signer mismatch/);
+});
+
+
+test('recipient lookup rechecks the current username and never confirms unknown or reassigned handles',async()=>{
+ const f=await fixture();f.config.telegramBotToken='bot-test';let calls=0;
+ const fetcher=async(url,init)=>{
+  calls++;
+  if(String(url).endsWith('/getChat')){const id=JSON.parse(init.body).chat_id;return {ok:true,json:async()=>({ok:true,result:{type:'private',username:id==='1'?'sold_handle':'hamoon',first_name:'Current owner'}})}}
+  return {ok:true,text:async()=>'<html><h1>Site Unavailable</h1></html>'};
+ };
+ const app=await buildApp({...f,chain:{},fetcher});try{
+  const found=await app.inject('/api/public/recipients?q=Hamoon');assert.equal(found.statusCode,200,found.body);assert.equal(found.json().results.length,1);assert.equal(found.json().results[0].name,'Current owner');assert.equal(found.json().results[0].id,undefined);
+  const before=calls;await app.inject('/api/public/recipients?q=hamoon');assert.equal(calls,before);
+  const unknown=(await app.inject('/api/public/recipients?q=unknown_name')).json();assert.equal(unknown.results.length,0);assert.equal(unknown.exactStatus,'unavailable');
+  assert.equal((await app.inject('/api/public/recipients?q=../../bad')).statusCode,400);
+ }finally{await app.close();await f.db.close()}
+});
+test('public Telegram preview only recognizes matching contact profiles, not generic or channel pages',async()=>{
+ const {parsePublicProfile}=await import('../src/recipients.mjs');
+ const page='<div class="tgme_page_title"><span>A &amp; B</span></div><div class="tgme_page_extra">@hamoon</div><img class="tgme_page_photo_image" src="https://cdn4.telesco.pe/file/photo.jpg"><a>Send Message</a>';
+ assert.equal(parsePublicProfile(page,'hamoon').name,'A & B');assert.ok(parsePublicProfile(page,'hamoon').photo.startsWith('https://cdn4.telesco.pe/'));
+ assert.equal(parsePublicProfile(page,'other'),null);assert.equal(parsePublicProfile(page.replace('Send Message','View Channel'),'hamoon'),null);assert.equal(parsePublicProfile('<a>Send Message</a>','hamoon'),null);
+ assert.equal(parsePublicProfile(page.replace('https://cdn4.telesco.pe/file/photo.jpg','https://evil.example/photo.jpg'),'hamoon').photo,null);
 });

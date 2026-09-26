@@ -5,6 +5,7 @@ import helmet from '@fastify/helmet';
 import fastifyStatic from '@fastify/static';
 import {botAuthRoutes,launcherFor} from './bot-auth.mjs';
 import {authRoutes,sessionFor} from './auth.mjs';
+import {recipientRoutes} from './recipients.mjs';
 import {launchRoutes} from './launches.mjs';
 import {metadataRoutes} from './metadata.mjs';
 import {reserveClaim,normalizeHandle} from './ledger.mjs';
@@ -39,13 +40,13 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  });
  app.get('/api/health',async()=>{await db.query('SELECT 1');return {ok:true};});
  app.get('/api/runtime',async()=>({...readiness(config),minimumClaimLamports:config.minimumClaim.toString()}));
- botAuthRoutes(app,{db,config,fetcher});authRoutes(app,{db,config,verifyIdentity,fetcher});launchRoutes(app,{db,config,chain});metadataRoutes(app,config);
+ botAuthRoutes(app,{db,config,fetcher});authRoutes(app,{db,config,verifyIdentity,fetcher});launchRoutes(app,{db,config,chain});metadataRoutes(app,config);recipientRoutes(app,{db,config,fetcher});
  app.get('/api/public/tokens',async req=>{
   const search=String(req.query.q||'').slice(0,80),offset=Math.max(0,Math.min(100000,Number(req.query.offset)||0));
-  const {rows}=await db.query("SELECT l.id,l.mint,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,'0') AS earned_lamports,COALESCE(f.gross,'0') AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND (l.name ILIKE $1 OR l.symbol ILIKE $1 OR l.recipient_handle ILIKE $1) ORDER BY l.confirmed_at DESC LIMIT 48 OFFSET $2",[`%${search}%`,offset]);return {tokens:rows};
+  const {rows}=await db.query("SELECT l.id,l.mint,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,'0') AS earned_lamports,COALESCE(f.gross,'0') AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND (l.name ILIKE $1 OR l.symbol ILIKE $1 OR l.recipient_handle ILIKE $1) ORDER BY l.confirmed_at DESC LIMIT 48 OFFSET $2",[`%${search}%`,offset]);return {tokens:rows};
  });
  app.get('/api/public/token/:id',async req=>{
-  const {rows:[token]}=await db.query("SELECT l.id,l.mint,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND l.id=$1",[req.params.id]);need(token,404,'Token not found');return token;
+  const {rows:[token]}=await db.query("SELECT l.id,l.mint,l.wallet AS launcher_wallet,l.name,l.symbol,l.description,l.image_uri,l.recipient_handle,l.confirmed_at,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.status='confirmed' AND l.id=$1",[req.params.id]);need(token,404,'Token not found');return token;
  });
  app.get('/api/public/analytics' ,async()=>{
   const {rows:[fees]}=await db.query('SELECT COALESCE(sum(gross),0)::text AS collected,COALESCE(sum(recipient),0)::text AS recipients,COALESCE(sum(project),0)::text AS project FROM fee_events');
@@ -58,7 +59,7 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  app.get('/api/public/profile/:handle',async req=>{
   const handle=normalizeHandle(req.params.handle);need(/^[a-z][a-z0-9_]{3,31}$/.test(handle),400,'Invalid Telegram username');
   const {rows:[balance]}=await db.query('SELECT earned::text,settled::text,reserved::text FROM balances WHERE handle=$1',[handle]);
-  const {rows:tokens}=await db.query("SELECT l.id,l.mint,l.name,l.symbol,l.image_uri,l.confirmed_at,l.recipient_handle,COALESCE(f.earned,0)::text AS earned_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.recipient_handle=$1 AND l.status='confirmed' ORDER BY l.confirmed_at DESC LIMIT 48",[handle]);
+  const {rows:tokens}=await db.query("SELECT l.id,l.mint,l.name,l.symbol,l.description,l.image_uri,l.confirmed_at,l.recipient_handle,l.signature,COALESCE(f.earned,0)::text AS earned_lamports,COALESCE(f.gross,0)::text AS collected_lamports FROM launches l LEFT JOIN (SELECT launch_id,sum(recipient) AS earned,sum(gross) AS gross FROM fee_events GROUP BY launch_id) f ON f.launch_id=l.id WHERE l.recipient_handle=$1 AND l.status='confirmed' ORDER BY l.confirmed_at DESC LIMIT 48",[handle]);
   return {handle,balance:balance||{earned:'0',settled:'0',reserved:'0'},tokens};
  });
  app.get('/api/claims',async req=>{const {rows}=await db.query('SELECT id,handle,wallet,amount::text,status,signature,created_at FROM claims WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',[req.session.user_id]);return {claims:rows};});

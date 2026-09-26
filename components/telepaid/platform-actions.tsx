@@ -1,24 +1,28 @@
 'use client';
-import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
+import {createContext,useContext,useEffect,useRef,useState,useCallback,type ReactNode} from 'react';
 import bs58 from 'bs58';
+import {fromPublicToken,type Token,type PublicToken} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
 
 type Runtime={integrated?:boolean;telegram:boolean;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
 type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];balance?:{available:string;reserved:string;settled:string}};
-type Launch={id:string;mint:string;name:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;buy?:{status:string;transaction:string;signature?:string}};
+export type Launch={id:string;mint:string;name:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;buy?:{status:string;transaction:string;signature?:string}};
 export async function request<T=any>(path:string,body?:unknown,headers:Record<string,string>={}){
  const r=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'content-type':'application/json',...headers},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(45000)});
  const data=await r.json() as T&{error?:string};if(!r.ok)throw new Error(data.error||'The request could not be completed');return data;
 }
 export function asSOL(value='0'){const n=BigInt(value);return `${n/1000000000n}.${(n%1000000000n).toString().padStart(9,'0')}`.replace(/\.?0+$/,'');}
 function lamports(value:string){if(!/^\d+(\.\d{1,9})?$/.test(value||'0'))throw new Error('Use a SOL amount with up to 9 decimal places');const [a,b='']=(value||'0').split('.');return (BigInt(a)*1000000000n+BigInt(b.padEnd(9,'0'))).toString();}
-const PlatformContext=createContext<{runtime:Runtime|null;session:Session;refresh:()=>Promise<void>}>({runtime:null,session:{user:null},refresh:async()=>{}});
+const PlatformContext=createContext<{runtime:Runtime|null;session:Session;refresh:()=>Promise<void>;liveTokens:Token[];tokensError:string;refreshTokens:()=>Promise<void>}>({runtime:null,session:{user:null},refresh:async()=>{},liveTokens:[],tokensError:'',refreshTokens:async()=>{}});
 export const usePlatform=()=>useContext(PlatformContext);
 export function PlatformProvider({children}:{children:ReactNode}){
  const [runtime,setRuntime]=useState<Runtime|null>(null),[session,setSession]=useState<Session>({user:null});
+ const [liveTokens,setLiveTokens]=useState<Token[]>([]),[tokensError,setTokensError]=useState('');
+ const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
+ useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>void refreshTokens(),30000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens]);
  async function refresh(){setSession(await request('/api/session'));}
  useEffect(()=>{void request('/api/runtime').then(setRuntime).catch(()=>{});void refresh().catch(()=>{});},[]);
- return <PlatformContext.Provider value={{runtime,session,refresh}}>{children}</PlatformContext.Provider>;
+ return <PlatformContext.Provider value={{runtime,session,refresh,liveTokens,tokensError,refreshTokens}}>{children}</PlatformContext.Provider>;
 }
 function useOperation(){
  const [busy,setBusy]=useState(false),[error,setError]=useState('');const lock=useRef(false);
@@ -45,13 +49,15 @@ export function TelegramAction(){
  {!login?<button className="btn white" disabled={busy||!wallet.address||!runtime?.telegram} onClick={()=>void run(start)}>{busy?'Waiting for wallet…':'Verify with TelePayFunBot'}</button>:<><a className="btn white" href={login.url} target="_blank" rel="noreferrer">Open Telegram bot</a><button className="btn outline" disabled={busy} onClick={()=>void run(finish)}>{busy?'Checking…':'I confirmed in Telegram'}</button><button className="text-link" disabled={busy} onClick={()=>void run(start)}>Start a new verification</button></>}
  {!runtime?.telegram&&<p className="field-help">Telegram verification is awaiting configuration.</p>}{notice&&<p className="field-help" role="status">{notice}</p>}{error&&<p className="form-error" role="alert">{error}</p>}</>;
 }
-export function LaunchAction({form,image}:{form:{name:string;symbol:string;recipient:string;description:string;website:string;telegram:string;twitter:string;initialBuy:string};image:string}){
- const wallet=useTeleWallet(),{runtime}=usePlatform(),{busy,error,run}=useOperation();
+export function LaunchAction({form,image,onCreated}:{onCreated:(id:string)=>void;form:{name:string;symbol:string;recipient:string;description:string;website:string;telegram:string;twitter:string;initialBuy:string};image:string}){
+ const wallet=useTeleWallet(),{runtime,refreshTokens}=usePlatform(),{busy,error,run}=useOperation();
  const [launch,setLaunch]=useState<Launch|null>(null),[notice,setNotice]=useState('');const key=useRef(crypto.randomUUID());
  const storageKey=`telepaid:launch:${runtime?.cluster}:${wallet.address}`;
- useEffect(()=>{let active=true;if(!runtime?.integrated||!wallet.address)return;const id=localStorage.getItem(storageKey);if(id)void request('/api/auth/wallet/session').then(s=>s.address===wallet.address?request(`/api/launches/${id}`):null).then(l=>{if(active&&l)setLaunch(l)}).catch(()=>{});return()=>{active=false}},[storageKey,runtime?.integrated,wallet.address]);
+ const opened=useRef('');
+ useEffect(()=>{if(launch?.status==='confirmed'&&opened.current!==launch.id){opened.current=launch.id;void refreshTokens();onCreated(launch.id)}},[launch?.status,launch?.id,onCreated,refreshTokens]);
+ useEffect(()=>{let active=true;if(!runtime?.integrated||!wallet.address)return;const id=localStorage.getItem(storageKey);if(id)void request('/api/auth/wallet/session').then(s=>s.address===wallet.address?request(`/api/launches/${id}`):null).then(l=>{if(active&&l&&!['confirmed','failed','expired'].includes(l.status))setLaunch(l)}).catch(()=>{});return()=>{active=false}},[storageKey,runtime?.integrated,wallet.address]);
  useEffect(()=>{if(!launch||!['submitted','preparing'].includes(launch.status)&&launch.buy?.status!=='submitted')return;const id=setInterval(()=>{void request(`/api/launches/${launch.id}`).then(setLaunch).catch(()=>{})},5000);return()=>clearInterval(id)},[launch]);
- async function prepare(){const saved=localStorage.getItem(storageKey);if(saved){await ensureLauncher(wallet);setLaunch(await request(`/api/launches/${saved}`));return;}if(!image)throw new Error('Upload a token image first');const s=await ensureLauncher(wallet);const row=await request('/api/launches/prepare',{...form,wallet:wallet.address,image,initialBuyLamports:lamports(form.initialBuy)}, {'x-csrf-token':s.csrf,'idempotency-key':key.current});localStorage.setItem(storageKey,row.id);setLaunch(row);setNotice('Transaction prepared. Review the network and recipient before signing.');}
+ async function prepare(){const saved=localStorage.getItem(storageKey);if(saved){await ensureLauncher(wallet);const previous=await request<Launch>(`/api/launches/${saved}`);if(!['confirmed','failed','expired'].includes(previous.status)){setLaunch(previous);setNotice('Resuming your saved launch. Its name, recipient and initial buy are shown below.');return;}localStorage.removeItem(storageKey);}if(!image)throw new Error('Upload a token image first');const s=await ensureLauncher(wallet);const row=await request('/api/launches/prepare',{...form,wallet:wallet.address,image,initialBuyLamports:lamports(form.initialBuy)}, {'x-csrf-token':s.csrf,'idempotency-key':key.current});localStorage.setItem(storageKey,row.id);setLaunch(row);setNotice('Transaction prepared. Review the network and recipient before signing.');}
  async function refresh(){const s=await ensureLauncher(wallet);setLaunch(await request(`/api/launches/${launch!.id}/refresh`,{}, {'x-csrf-token':s.csrf}));}
  async function signCreate(){const s=await ensureLauncher(wallet);setNotice('Review token creation in your wallet.');const signed=await wallet.signTransaction(decode(launch!.transaction));setLaunch(await request(`/api/launches/${launch!.id}/submit`,{transaction:encode(signed)}, {'x-csrf-token':s.csrf}));setNotice('Submitted. Waiting for Solana finalization; you can return to this launch.');}
  async function buy(){const s=await ensureLauncher(wallet);const headers={'x-csrf-token':s.csrf};const quote=await request(`/api/launches/${launch!.id}/buy/prepare`,{},headers);if(quote.status==='prepared'){setNotice('Review the separate initial buy in your wallet (1% slippage).');const signed=await wallet.signTransaction(decode(quote.transaction));await request(`/api/launches/${launch!.id}/buy/submit`,{transaction:encode(signed)},headers);}setLaunch(await request(`/api/launches/${launch!.id}`));}
@@ -78,9 +84,29 @@ export function ClaimAccount({onVerify}:{onVerify:()=>void}){
  {!session.claimVerificationFresh||!session.wallets?.includes(wallet.address)?<button className="btn white" onClick={onVerify}>Verify Telegram & wallet</button>:<button className="btn white" disabled={busy||!runtime.claims||BigInt(available)<BigInt(runtime.minimumClaimLamports)||!!claim&&['queued','submitted'].includes(claim.status)} onClick={()=>void run(submit)}>{busy?'Submitting…':'Claim to connected wallet'}</button>}
  {!runtime.claims&&<p className="field-help">Payouts are paused until the settlement service is funded.</p>}{claim&&<p role="status">Claim {claim.status} <TransactionLink signature={claim.signature} cluster={runtime.cluster}/></p>}{error&&<p className="form-error" role="alert">{error}</p>}</div>;
 }
-export function RealLaunches(){
- const {runtime}=usePlatform();const [rows,setRows]=useState<Array<{id:string;mint:string;name:string;symbol:string;image_uri:string;recipient_handle:string;earned_lamports:string}>>([]);
- useEffect(()=>{if(!runtime?.integrated)return;void request('/api/public/tokens').then(r=>setRows(r.tokens)).catch(()=>{})},[runtime?.integrated]);
- if(!rows.length)return null;
- return <section><div className="section-head"><h2>On-chain launches</h2><span>Verified on Solana</span></div><div className="token-grid explore-grid">{rows.map(t=><a className="token-card" key={t.id} href={`https://pump.fun/coin/${t.mint}`} target="_blank" rel="noreferrer"><div className="token-picture"><img src={t.image_uri} alt={t.name} style={{width:'100%',height:'100%',objectFit:'cover'}}/></div><div className="token-caption"><div><span>{t.name}</span><small>{t.symbol}</small></div><div className="card-earned"><span>{asSOL(t.earned_lamports)} SOL</span><small>@{t.recipient_handle}</small></div></div></a>)}</div></section>;
+
+export function InitialBuyAction({id,ownerWallet}:{id:string;ownerWallet?:string}){
+ const wallet=useTeleWallet(),{runtime}=usePlatform(),{busy,error,run}=useOperation();
+ const [launch,setLaunch]=useState<Launch|null>(null),[amount,setAmount]=useState(''),[notice,setNotice]=useState('');
+ useEffect(()=>{let active=true;setLaunch(null);setAmount('');if(!wallet.address)return;void request('/api/auth/wallet/session').then(s=>s.address===wallet.address?request<Launch>(`/api/launches/${id}`):null).then(row=>{if(active&&row){setLaunch(row);setAmount(asSOL(row.initialBuyLamports));}}).catch(()=>{});return()=>{active=false}},[id,wallet.address]);
+ useEffect(()=>{if(launch?.buy?.status!=='submitted')return;let active=true;const timer=setInterval(()=>{void request<Launch>(`/api/launches/${id}`).then(row=>{if(active)setLaunch(row)}).catch(()=>{})},4000);return()=>{active=false;clearInterval(timer)}},[id,launch?.buy?.status]);
+ async function buy(){
+  const s=await ensureLauncher(wallet),headers={'x-csrf-token':s.csrf};
+  const quote=await request(`/api/launches/${id}/buy/prepare`,{amountLamports:lamports(amount)},headers);
+  setLaunch(await request(`/api/launches/${id}`));
+  if(quote.status!=='prepared')return;
+  setNotice(`Review the separate ${amount} SOL buy in your wallet. Token creation is already complete.`);
+  const signed=await wallet.signTransaction(decode(quote.transaction));
+  await request(`/api/launches/${id}/buy/submit`,{transaction:encode(signed)},headers);
+  setLaunch(await request(`/api/launches/${id}`));setNotice('Buy submitted. Waiting for Solana finalization.');
+ }
+ if(ownerWallet&&wallet.address!==ownerWallet)return null;
+ if(!launch)return wallet.address&&ownerWallet?<section className="launch-continuation"><h2>Continue your initial buy</h2><p>Verify your connected wallet to load this token’s buy status.</p><button className="btn outline" disabled={busy} onClick={()=>void run(async()=>{await ensureLauncher(wallet);const row=await request<Launch>(`/api/launches/${id}`);setLaunch(row);setAmount(asSOL(row.initialBuyLamports));})}>{busy?'Verifying…':'Load initial buy'}</button>{error&&<p role="alert">{error}</p>}</section>:null;
+ if(launch.status!=='confirmed')return null;
+ const status=launch.buy?.status;
+ return <section className="launch-continuation" aria-label="Complete initial buy"><div><span className="status-tag">Token created</span><h2>{status==='confirmed'?'Initial buy completed':status==='submitted'?'Initial buy is confirming':'Complete your initial buy'}</h2><p>{status==='confirmed'?`${asSOL(launch.initialBuyLamports)} SOL buy finalized on Solana.`:status==='submitted'?'Your signed buy is on its way. No second approval is needed.':`Creation is complete. ${BigInt(launch.initialBuyLamports)>0n?`Your ${asSOL(launch.initialBuyLamports)} SOL buy still needs a separate wallet approval.`:'No initial buy has been made. You can add one here.'}`}</p></div>
+ {!['submitted','confirmed'].includes(status||'')&&<div className="buy-controls"><label className="field">Initial buy · SOL<input type="number" min="0.000000001" step="0.001" value={amount} disabled={busy||status==='prepared'} onChange={e=>setAmount(e.target.value)}/></label><button className="btn white" disabled={busy||!runtime?.launch||!Number(amount)} onClick={()=>void run(buy)}>{busy?'Waiting for wallet…':status==='failed'||status==='expired'?'Retry initial buy':'Approve initial buy'}</button><small>Separate wallet approval · 1% slippage · Network fees are additional.</small></div>}
+ {status==='failed'&&<p className="form-error">The buy failed; your token is still live. You can retry just the buy.</p>}
+ {status==='expired'&&<p className="field-help">The buy expired. Retry to prepare a fresh quote.</p>}
+ <TransactionLink signature={launch.buy?.signature} cluster={runtime?.cluster}/>{notice&&status!=='confirmed'&&<p role="status" className="field-help">{notice}</p>}{error&&<p className="form-error" role="alert">{error} Your token is already created.</p>}</section>;
 }

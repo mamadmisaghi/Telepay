@@ -66,8 +66,17 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
  app.post('/api/launches/:id/buy/prepare',async req=>{
   need(config.launchesEnabled,503,'Token launches are paused');
   return db.transaction(async tx=>{
-   const {rows:[row]}=await tx.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2 FOR UPDATE',[req.params.id,req.session.user_id]);need(row,404,'Launch not found');need(row.status==='confirmed',409,'Wait for token creation to finalize');need(BigInt(row.initial_buy)>0n,400,'No initial buy was requested');
-   const previous=(await tx.query('SELECT * FROM launch_buys WHERE launch_id=$1',[row.id])).rows[0];
+   const {rows:[row]}=await tx.query('SELECT * FROM launches WHERE id=$1 AND owner_id=$2 FOR UPDATE',[req.params.id,req.session.user_id]);need(row,404,'Launch not found');need(row.status==='confirmed',409,'Wait for token creation to finalize');
+   let previous=(await tx.query('SELECT * FROM launch_buys WHERE launch_id=$1',[row.id])).rows[0];
+   const requested=req.body?.amountLamports;
+   if(requested!==undefined){
+    need(typeof requested==='string'&&/^\d{1,12}$/.test(requested)&&BigInt(requested)>0n,400,'Enter an initial buy greater than 0 SOL');
+    if(BigInt(requested)!==BigInt(row.initial_buy)){
+     need(!previous||['failed','expired'].includes(previous.status),409,'Finish the existing buy before changing its amount');
+     await tx.query('UPDATE launches SET initial_buy=$2 WHERE id=$1',[row.id,requested]);row.initial_buy=requested;
+    }
+   }
+   need(BigInt(row.initial_buy)>0n,400,'No initial buy was requested');
    if(previous&&['submitted','confirmed'].includes(previous.status))return buyView(previous);
    if(previous?.status==='prepared'&&await chain.connection.getBlockHeight('confirmed')<=Number(previous.last_valid_height))return buyView(previous);
    const p=await chain.prepareBuy({mint:row.mint,wallet:row.wallet,initialBuy:BigInt(row.initial_buy)});
