@@ -637,5 +637,12 @@ test('TelePay bot welcomes without directory opt-in and exposes explicit discove
   assert.match(sent.at(-1).body.text,/TelePay · Verify your account/);
   assert.match(sent.at(-1).body.text,new RegExp(f.wallet.publicKey.toBase58()));
   assert.equal(sent.at(-1).body.reply_markup.inline_keyboard[0][0].callback_data,'verify:11111111-1111-4111-8111-111111111111');
+  const callback=()=>app.inject({method:'POST',url:'/api/telegram/webhook',headers:{'x-telegram-bot-api-secret-token':'test-secret'},payload:{callback_query:{id:'callback-1',data:'verify:11111111-1111-4111-8111-111111111111',from:{id:7,username:'example_user',first_name:'Example'},message:{message_id:1,chat:{id:7,type:'private'}}}}});
+  assert.equal((await callback()).statusCode,200);
+  assert.match(sent.at(-1).body.text,/Account confirmed/);
+  assert.equal(sent.at(-1).body.reply_markup.inline_keyboard[0][0].url,'http://localhost:8080/#claims');
+  const edits=sent.filter(item=>item.method==='editMessageText').length;
+  assert.equal((await callback()).statusCode,200);
+  assert.equal(sent.filter(item=>item.method==='editMessageText').length,edits);
  }finally{await app.close();await f.db.close();}
 });

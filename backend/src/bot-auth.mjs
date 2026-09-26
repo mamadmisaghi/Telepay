@@ -114,7 +114,6 @@ export function botAuthRoutes(app,{db,config,fetcher=fetch}){
    const result=await db.query("UPDATE login_requests SET identity=$2,verified_at=now() WHERE id=$1 AND kind='telegram' AND expires_at>now() AND verified_at IS NULL RETURNING id",[id,JSON.stringify(identity)]);
    await bot('answerCallbackQuery',{callback_query_id:callback.id,text:result.rowCount?'Account confirmed. Finish on TelePay.':'Request expired or already confirmed. Start again on TelePay.',show_alert:!result.rowCount});
    if(result.rowCount)await bot('editMessageText',{chat_id:callback.message.chat.id,message_id:callback.message.message_id,text:`TelePay · Account confirmed\n\n@${username} is verified for this request. Return to the same browser and wallet to complete verification within 2 minutes. You can then view your available fees on the Claims page.`,reply_markup:{inline_keyboard:[[{text:'Return to Claims',url:claimsUrl}]]}});
-   else await bot('editMessageText',{chat_id:callback.message.chat.id,message_id:callback.message.message_id,text:'This TelePay verification request expired or was already used. Start a new request from the Claims page.',reply_markup:retryKeyboard});
   }
   return {ok:true};
  });
