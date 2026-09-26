@@ -3,7 +3,7 @@ import {createContext,useContext,useEffect,useRef,useState,useCallback,type Reac
 import bs58 from 'bs58';
 import {fromPublicToken,type Token,type PublicToken} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
-import {signOutBrowser,walletDisconnectedKey} from './sign-out';
+import {rememberVerifiedSession,signOutBrowser,telegramSessionVersionKey,walletDisconnectedKey} from './sign-out';
 
 type Runtime={integrated?:boolean;telegram:boolean;telegramBotUsername?:string;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
 type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{earned:string;available:string;reserved:string;settled:string}};
@@ -43,6 +43,11 @@ export function PlatformProvider({children}:{children:ReactNode}){
   }
   detachedLogout.current=false;
   const next=await request<Session>('/api/session');
+  // One-time migration: old clients could leave Telegram signed in after a
+  // wallet disconnect. Revoke that legacy session before displaying its badge.
+  let oldSession=false;try{oldSession=!!next.user&&localStorage.getItem(telegramSessionVersionKey)!=='ready'}catch{}
+  if(oldSession){await signOutBrowser();return;}
+  if(!next.user)rememberVerifiedSession();
   if(epoch===sessionEpoch.current)setSession(next);
  },[]);
  useEffect(()=>{const clear=()=>{sessionEpoch.current++;detachedLogout.current=true;setSession({user:null})};window.addEventListener('telepaid:logged-out',clear);return()=>window.removeEventListener('telepaid:logged-out',clear)},[]);
@@ -88,7 +93,7 @@ export function TelegramAction({onVerified}:{onVerified?:(username:string)=>void
   lock.current=true;setBusy(true);
   try{
    if(!completed.current){const result=await request('/api/auth/bot/finish',{id:login.id},{'x-launch-csrf':login.csrf});if(!active.current||latestWallet.current!==login.address)return;if(result.pending){setNotice('Waiting for your confirmation in Telegram…');return;}completed.current=result.username;}
-   await refresh();if(!active.current||latestWallet.current!==login.address)return;
+   rememberVerifiedSession();await refresh();if(!active.current||latestWallet.current!==login.address)return;
    const username=completed.current;save(null);setError('');setNotice(`@${username} verified successfully.`);verified.current?.(username);
   }catch(e){if(active.current){setError(e instanceof Error?e.message:'Could not check verification. Try again.');}}
   finally{lock.current=false;if(active.current)setBusy(false);}
