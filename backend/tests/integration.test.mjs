@@ -199,6 +199,12 @@ test('public endpoints hide secrets; launch and claim switches fail closed; logo
   assert.equal((await app.inject({method:'POST',url:'/api/launches/prepare',headers,payload:{}})).statusCode,503);
   assert.equal((await app.inject({method:'POST',url:'/api/claims',headers,payload:{amount:'1000000',wallet:f.wallet.publicKey.toBase58()}})).statusCode,503);
   const tokens=(await app.inject('/api/public/tokens')).json().tokens;assert.equal(tokens.length,1);assert.equal(tokens[0].creator_secret,undefined);assert.equal(tokens[0].transaction_base64,undefined);
+  assert.equal(tokens[0].market_cap_usd,null);assert.equal(tokens[0].last_trade_at,null);
+  await f.db.query("INSERT INTO market_state(launch_id,spot_price_sol,updated_at,sol_usd,sol_usd_at,supply) VALUES('launch1',0.001,now(),100,now(),1000000)");
+  await f.db.query("INSERT INTO market_trades VALUES('launch1','listing-trade',0,1,now(),'buy','wallet',1000000,1000000,0.001)");
+  const listed=(await app.inject('/api/public/tokens')).json().tokens[0];assert.equal(listed.market_cap_usd,100000);assert.ok(listed.last_trade_at);
+  await f.db.query("UPDATE market_state SET updated_at=now()-interval '2 minutes'");
+  assert.equal((await app.inject('/api/public/tokens')).json().tokens[0].market_cap_usd,null);
   const detail=(await app.inject('/api/public/token/launch1')).json();assert.equal(detail.mint,tokens[0].mint);assert.equal(detail.recipient_handle,'hamoon');assert.equal(detail.creator_secret,undefined);
   assert.equal((await app.inject('/api/public/token/missing')).statusCode,404);
   const profile=(await app.inject('/api/public/profile/hamoon')).json();assert.equal(profile.tokens[0].id,'launch1');assert.equal(profile.tokens[0].collected_lamports,'0');
@@ -414,5 +420,28 @@ test('USD candles use historical reference rates; missing rates do not invent do
  const service=marketService({db:f.db,chain:{},config:{production:true}}),r=await service.load({id:'launch1'},60);
  assert.equal(r.spotPriceUsd,0.4);assert.equal(r.candles[0].close,0.15);assert.equal(r.candles[1].close,0.1);assert.equal(r.stats.volume24hUsd,250);assert.equal(r.stats.marketCapUsd,400);
  await f.db.query('DELETE FROM sol_usd_rates WHERE minute=$1',[now-300]);const missing=await service.load({id:'launch1'},60);assert.equal(missing.candles.length,1);assert.equal(missing.stats.volume24hUsd,null);assert.equal(missing.trades[0].priceUsd,null);
+ }finally{await f.db.close()}
+});
+
+test('truncated trade logs recover from authenticated Anchor event CPIs without double counting',async()=>{
+ const {parseTrades}=await import('../src/market.mjs');const {PUMP_PROGRAM_ID,PUMP_EVENT_AUTHORITY_PDA}=await import('@pump-fun/pump-sdk');const {createHash}=await import('node:crypto');
+ const fixture=JSON.parse(await readFile(new URL('./fixtures/atomic-simulation.json',import.meta.url),'utf8'));
+ const discriminator=createHash('sha256').update('event:TradeEvent').digest().subarray(0,8);
+ const event=fixture.meta.logMessages.filter(l=>l.startsWith('Program data: ')).map(l=>Buffer.from(l.slice(14),'base64')).find(b=>b.subarray(0,8).equals(discriminator));
+ const keys=[PUMP_PROGRAM_ID,PUMP_EVENT_AUTHORITY_PDA];const transaction={message:{getAccountKeys:()=>({get:i=>keys[i]})}};
+ const innerInstructions=[{index:4,instructions:[{programIdIndex:0,accounts:[1],data:bs58.encode(Buffer.concat([Buffer.from('e445a52e51cb9a1d','hex'),event]))}]}];
+ const truncated={...fixture,transaction,meta:{...fixture.meta,innerInstructions,logMessages:['Log truncated']}};
+ assert.equal(parseTrades(truncated,fixture.mint,fixture.signature).length,1);
+ assert.equal(parseTrades({...truncated,meta:{...truncated.meta,logMessages:fixture.meta.logMessages}},fixture.mint,fixture.signature).length,1);
+ keys[1]=Keypair.generate().publicKey;assert.equal(parseTrades(truncated,fixture.mint,fixture.signature).length,0);
+});
+
+test('a single finalized transaction may distribute for two mints, with independent idempotent credits',async()=>{
+ const f=await fixture();try{
+ const mint=Keypair.generate().publicKey.toBase58();await f.db.query("INSERT INTO mint_pool(address,secret_encrypted,suffix,status) VALUES($1,'unused','TeLe','consumed')",[mint]);
+ await f.db.query("INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri) SELECT 'launch2','key2',owner_id,'othername',wallet,$1,$1,creator_secret,name,symbol,description,metadata_uri,image_uri FROM launches WHERE id='launch1'",[mint]);
+ for(const launchId of ['launch1','launch2']){const e={eventId:'shared:'+launchId,launchId,recipientHandle:launchId==='launch1'?'hamoon':'othername',signature:'one-transaction',lamports:100n,slot:123};assert.equal(await recordCollection(f.db,e),true);assert.equal(await recordCollection(f.db,{...e,eventId:'other:'+launchId}),false);}
+ assert.equal((await f.db.query('SELECT * FROM fee_events')).rowCount,2);
+ assert.deepEqual((await f.db.query('SELECT earned::text FROM balances ORDER BY handle')).rows.map(x=>x.earned),['80','80']);
  }finally{await f.db.close()}
 });

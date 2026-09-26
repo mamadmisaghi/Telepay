@@ -18,7 +18,7 @@ function Candles({candles,interval}:{candles:Candle[];interval:number}){
   if(!container.current)return;
   const api=createChart(container.current,{autoSize:true,height:360,layout:{background:{type:ColorType.Solid,color:'#1B1E23'},textColor:'#A0A7B0',fontFamily:'Inter, sans-serif',fontSize:11,attributionLogo:true},grid:{vertLines:{color:'#252A30'},horzLines:{color:'#252A30'}},crosshair:{mode:CrosshairMode.Normal,vertLine:{color:'#7D8793',labelBackgroundColor:'#30363D'},horzLine:{color:'#7D8793',labelBackgroundColor:'#30363D'}},rightPriceScale:{borderColor:'#30363D',scaleMargins:{top:0.12,bottom:0.26}},timeScale:{borderColor:'#30363D',timeVisible:true,secondsVisible:false,rightOffset:5},localization:{priceFormatter:(n:number)=>usd(n)}});
   const prices=api.addSeries(CandlestickSeries,{upColor:'#42C99A',downColor:'#F07887',wickUpColor:'#42C99A',wickDownColor:'#F07887',borderVisible:false,priceFormat:{type:'custom',minMove:0.000000000001,formatter:(n:number)=>usd(n)}});
-  const volumes=api.addSeries(HistogramSeries,{priceFormat:{type:'volume'},priceScaleId:'volume'});volumes.priceScale().applyOptions({scaleMargins:{top:0.82,bottom:0},visible:false});
+  const volumes=api.addSeries(HistogramSeries,{priceFormat:{type:'volume'},priceScaleId:'volume',lastValueVisible:false,priceLineVisible:false});volumes.priceScale().applyOptions({scaleMargins:{top:0.82,bottom:0},visible:false});
   api.subscribeCrosshairMove(param=>{const p=param.seriesData.get(prices);if(p&&'open' in p)setHover({...p,time:Number(param.time),volumeUsd:0,trades:0} as Candle);else setHover(null);});chart.current=api;series.current=prices;volume.current=volumes;fitted.current=false;
   return()=>{api.remove();chart.current=null;series.current=null;volume.current=null};
  },[interval]);

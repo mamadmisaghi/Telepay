@@ -37,3 +37,12 @@ Background indexing paginates finalized curve/PumpSwap transactions with durable
 Full 24h volume remains pending while catch-up is incomplete. 24h price change requires a pre-window baseline and at least 24 hours of token history. Market cap uses actual mint supply. Holders count unique on-curve wallet owners with positive balances across paginated DAS token accounts; program-controlled accounts are excluded. Holder data is cached for 5 minutes and hidden if stale beyond 10 minutes. Market charts show the last 25 hours of indexed trades; earlier trades remain in the database.
 
 The approved graphite/blue shell, logo, typography, sidebar, launch controls and sample listings are preserved. Scoped changes: candlestick chart + volume/crosshair/zoom, top statistics bar, copyable contract address, recipient lookup hints. TradingView Lightweight Charts attribution is included.
+
+## Release validation
+
+- 33 backend tests passed (31-suite run plus two additional event-CPI/deduplication tests). TypeScript and Vite production builds passed.
+- Web and worker deployment of GitHub commit `1e636d02b0cd25b144f7a179fa4b52c901af3587` succeeded on Railway; migration 004 completed.
+- Live authenticated preparation with a 0.001 SOL initial buy produced one 1128-byte transaction, six instructions, the configured lookup table and an unsigned payer. It was not submitted. This confirms deployed preparation/configuration, not real-money settlement.
+- Live exact Telegram lookup returned the recipient profile and photo through MTProto. Both credential pairs were tested on Railway; the second pair is not required in production.
+- Live token detail displayed indexed USD candles/trades, market cap, 24h volume and holder count. A contract copied from the header pasted back identically into search.
+- Outstanding operational gates: user-account Telegram session for global suggestions, operator gas funding, and a budget-approved mainnet launch → trade → collection → verified claim test. Financial automation remains disabled until these gates are met. GMGN classification is still unverified.
