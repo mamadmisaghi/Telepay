@@ -43,6 +43,11 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  });
  app.get('/api/health',async()=>{await db.query('SELECT 1');return {ok:true};});
  app.get('/api/runtime',async()=>({...readiness(config),minimumClaimLamports:config.minimumClaim.toString()}));
+ // Aggregate availability only: never reveal mint addresses or private keys.
+ app.get('/api/public/mint-availability',{config:{rateLimit:{max:20,timeWindow:'1 minute'}}},async()=>{
+  const {rows:[pool]}=await db.query("SELECT count(*)::int AS ready FROM mint_pool WHERE status='ready' AND suffix=$1",[config.suffix]);
+  return {suffix:config.suffix,readyMints:pool.ready};
+ });
  botAuthRoutes(app,{db,config,fetcher});authRoutes(app,{db,config,verifyIdentity,fetcher});const recipients=recipientRoutes(app,{db,config,fetcher});launchRoutes(app,{db,config,chain,resolveRecipient:recipients.find});metadataRoutes(app,config);compactMetadataRoutes(app,config);marketRoutes(app,{db,chain,config});
  app.get('/api/public/tokens',async req=>{
   const search=String(req.query.q||'').slice(0,80),offset=Math.max(0,Math.min(100000,Number(req.query.offset)||0));

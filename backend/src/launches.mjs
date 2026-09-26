@@ -10,7 +10,7 @@ import {readKey,signedMatches} from './chain.mjs';
 import {saveMetadata,compactMetadata} from './metadata.mjs';
 import {need} from './errors.mjs';
 const url=z.string().max(200).refine(v=>!v||/^https:\/\/[^\s]+$/.test(v),'Use an HTTPS URL').default('');
-const schema=z.object({name:z.string().trim().min(2).max(32),symbol:z.string().regex(/^[A-Z0-9]{2,10}$/),description:z.string().max(1000).default(''),recipient:z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{3,31}$/),wallet:z.string().min(32).max(44),image:z.string().max(2800000),initialBuyLamports:z.string().regex(/^\d{1,12}$/).default('0'),website:url,telegram:url,twitter:url});
+const schema=z.object({name:z.string().trim().min(2).max(32),symbol:z.string().regex(/^[A-Z0-9]{2,10}$/),description:z.string().max(1000).default(''),recipient:z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{3,31}$/),recipientUnconfirmedAcknowledged:z.boolean().default(false),wallet:z.string().min(32).max(44),image:z.string().max(2800000),initialBuyLamports:z.string().regex(/^\d{1,12}$/).default('0'),website:url,telegram:url,twitter:url});
 const publicLaunch=r=>({id:r.id,mint:r.mint,name:r.name,symbol:r.symbol,status:r.status,recipientHandle:r.recipient_handle,signature:r.signature,transaction:r.transaction_base64,lastValidHeight:r.last_valid_height,initialBuyLamports:r.initial_buy,launchFormat:r.launch_format,image:r.image_uri});
 export function launchRoutes(app,{db,config,chain,resolveRecipient}){
  const prepareCreation=async(row,client=db)=>{
@@ -27,8 +27,12 @@ export function launchRoutes(app,{db,config,chain,resolveRecipient}){
   if(req.launcher){need(req.launcher.address===input.wallet,403,'Connected wallet does not match');}else {const wallet=await db.query('SELECT address FROM wallets WHERE user_id=$1 AND address=$2 AND verification_session_hash=$3',[req.session.user_id,input.wallet,req.session.token_hash]);need(wallet.rowCount,403,'Verify your wallet first');}
   const open=await db.query("SELECT count(*)::int AS total FROM launches WHERE owner_id=$1 AND status IN ('preparing','prepared','submitted')",[req.session.user_id]);need(open.rows[0].total<3,429,'Finish an existing launch before preparing another');
   need(Buffer.byteLength(input.name,'utf8')<=32,400,'Token name must fit within 32 UTF-8 bytes');
-  const recipient=await resolveRecipient(input.recipient.toLowerCase());
-  need(recipient?.status==='found',422,'Telegram profile could not be confirmed. Select a confirmed profile before launching');
+  // A failed directory lookup must not prevent routing fees to an exact
+  // username. Manual launches require explicit acknowledgement in the review.
+  if(!input.recipientUnconfirmedAcknowledged){
+   const recipient=await resolveRecipient(input.recipient.toLowerCase());
+   need(recipient?.status==='found',422,'Telegram profile could not be confirmed. Select a profile or confirm the exact username manually');
+  }
   const metadata=await saveMetadata(config,input);const id=randomUUID(),creator=Keypair.generate();
   const treasury=config.feeSharingEnabled?readKey(config.treasurySecret).publicKey.toBase58():null;
   const launch=await db.transaction(async tx=>{

@@ -179,11 +179,12 @@ test('official Pump create instruction builds with the intended mint, payer and 
 test('launch preparation uses the selected handle, compact metadata and requested atomic buy amount',async()=>{
  const f=await fixture();const {mkdtemp,rm}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
  const dir=await mkdtemp(join(tmpdir(),'telepaid-meta-'));f.config.metadataDir=dir;f.config.launchesEnabled=true;f.config.rpcUrl='http://test.invalid';
- const address='A'.repeat(40)+'TeLe';await f.db.query('INSERT INTO mint_pool(address,secret_encrypted,suffix) VALUES($1,$2,$3)',[address,'encrypted-test-only','TeLe']);
- let calls=0;const chain={prepareLaunch:async args=>{calls++;assert.equal(args.mint,address);assert.equal(args.encryptedMintSecret,'encrypted-test-only');assert.equal(args.initialBuy,1000000n);assert.match(args.uri,/\/api\/m\/[\w-]{22}$/);return {message:'message',wire:'wire',lastValidHeight:100,networkFeeLamports:'5000'};}};
+ const address='A'.repeat(40)+'TeLe',manualAddress='B'.repeat(40)+'TeLe';await f.db.query('INSERT INTO mint_pool(address,secret_encrypted,suffix) VALUES($1,$2,$3)',[address,'encrypted-test-only','TeLe']);
+ let calls=0;const chain={prepareLaunch:async args=>{calls++;assert.ok([address,manualAddress].includes(args.mint));assert.equal(args.encryptedMintSecret,'encrypted-test-only');assert.equal(args.initialBuy,1000000n);assert.match(args.uri,/\/api\/m\/[\w-]{22}$/);return {message:'message',wire:'wire',lastValidHeight:100,networkFeeLamports:'5000'};}};
  const app=await buildApp({...f,chain,fetcher:async()=>({ok:true,text:async()=>'<div class="tgme_page_title">Someone</div><div class="tgme_page_extra">@someoneelse</div><a>Send Message</a>'})});try{
   const request={method:'POST',url:'/api/launches/prepare',headers:{cookie:'tp_session=session2',origin:f.config.origin,'x-csrf-token':'csrf2','idempotency-key':'launch-replay-test-1'},payload:{name:'Hamoon coin',symbol:'HAM',recipient:'SomeoneElse',wallet:f.wallet.publicKey.toBase58(),image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aEZkAAAAASUVORK5CYII=',initialBuyLamports:'1000000'}};
   const rejected=await app.inject({...request,payload:{...request.payload,recipient:'unknownuser'}});assert.equal(rejected.statusCode,422);assert.equal(calls,0);
+  const availability=await app.inject('/api/public/mint-availability');assert.deepEqual(availability.json(),{suffix:'TeLe',readyMints:1});assert.ok(!availability.body.includes('secret_encrypted'));
   const result=await app.inject(request);assert.equal(result.statusCode,200,result.body);assert.equal(result.json().recipientHandle,'someoneelse');assert.equal(result.json().mint,address);
   assert.equal((await app.inject(request)).json().id,result.json().id);assert.equal(calls,1);assert.equal(result.json().launchFormat,'atomic-v1');
   const row=(await f.db.query('SELECT * FROM launches WHERE id=$1',[result.json().id])).rows[0];
@@ -194,6 +195,10 @@ test('launch preparation uses the selected handle, compact metadata and requeste
   const refresh=await app.inject({method:'POST',url:`/api/launches/${result.json().id}/refresh`,headers:request.headers,payload:{}});assert.equal(refresh.statusCode,200,refresh.body);assert.equal(refresh.json().mint,address);assert.equal(calls,2);
   const {rows:[pool]}=await f.db.query('SELECT status FROM mint_pool WHERE address=$1',[address]);assert.equal(pool.status,'reserved');
   const users=await f.db.query("SELECT id FROM users WHERE username='someoneelse'");assert.equal(users.rowCount,0);
+  await f.db.query('INSERT INTO mint_pool(address,secret_encrypted,suffix) VALUES($1,$2,$3)',[manualAddress,'encrypted-test-only','TeLe']);
+  const manual=await app.inject({...request,headers:{...request.headers,'idempotency-key':'manual-launch-replay-2'},payload:{...request.payload,recipient:'unknownuser',recipientUnconfirmedAcknowledged:true}});
+  assert.equal(manual.statusCode,200,manual.body);assert.equal(manual.json().recipientHandle,'unknownuser');assert.equal(manual.json().mint,manualAddress);assert.equal(calls,3);
+  assert.equal((await app.inject('/api/public/mint-availability')).json().readyMints,0);
  }finally{await app.close();await f.db.close();await rm(dir,{recursive:true,force:true});}
 });
 
