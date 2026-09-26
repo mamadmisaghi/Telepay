@@ -21,7 +21,11 @@ export function PlatformProvider({children}:{children:ReactNode}){
  const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
  useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>void refreshTokens(),30000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens]);
  const refresh=useCallback(async()=>{setSession(await request('/api/session'));},[]);
- useEffect(()=>{void request('/api/runtime').then(setRuntime).catch(()=>{});void refresh().catch(()=>{});},[]);
+ useEffect(()=>{void request('/api/runtime').then(setRuntime).catch(()=>{});void refresh().catch(()=>{});
+  const sync=()=>{if(document.visibilityState==='visible')void refresh().catch(()=>{})};
+  const timer=setInterval(sync,60000);window.addEventListener('focus',sync);
+  return()=>{clearInterval(timer);window.removeEventListener('focus',sync)};
+ },[refresh]);
  return <PlatformContext.Provider value={{runtime,session,refresh,liveTokens,tokensError,refreshTokens}}>{children}</PlatformContext.Provider>;
 }
 function useOperation(){

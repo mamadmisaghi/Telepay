@@ -1,7 +1,8 @@
 "use client";
 import {Component,createContext,useContext,useEffect,useState,lazy,Suspense,type ReactNode} from 'react';
 import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
-import {verifyWalletSignature,walletTestMessage} from '@/lib/wallet-signature';
+import {DropdownMenu,DropdownMenuTrigger,DropdownMenuContent,DropdownMenuItem} from '@/components/ui/dropdown-menu';
+import {LogOut} from 'lucide-react';
 
 export type TeleWallet={ready:boolean;address:string;error:string;connect:()=>void;disconnect:()=>Promise<void>;signMessage:(message:Uint8Array)=>Promise<Uint8Array>;signTransaction:(transaction:Uint8Array)=>Promise<Uint8Array>};
 const unavailable=async():Promise<never>=>{throw new Error('Wallet service is not ready. Please try again.');};
@@ -24,11 +25,18 @@ export function WalletProvider({children}:{children:ReactNode}){
  return <WalletErrorBoundary page={children}><Suspense fallback={<WalletContext.Provider value={fallback}>{children}</WalletContext.Provider>}><PrivyWallet appId={config.privyAppId} cluster={config.cluster||'mainnet-beta'}>{children}</PrivyWallet></Suspense></WalletErrorBoundary>;
 }
 
-export function WalletButton({className='btn outline small',onVerify,verified=false}:{className?:string;onVerify?:()=>Promise<void>;verified?:boolean}){
- const wallet=useTeleWallet();const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('');
- useEffect(()=>{setMessage('');setError('');if(!wallet.address)setOpen(false)},[wallet.address]);
- async function testSignature(){setBusy(true);setError('');setMessage('');try{const address=wallet.address,bytes=new TextEncoder().encode(walletTestMessage(location.origin,address));const signature=await wallet.signMessage(bytes);if(!await verifyWalletSignature(address,bytes,signature))throw new Error('Signature did not match this wallet.');setMessage('Signature verified. No transaction sent and no funds moved.');}catch(e){setError(e instanceof Error?e.message:'Signature test was cancelled.')}finally{setBusy(false)}}
- return <><button className={className} onClick={()=>{setError('');setMessage('');if(wallet.address||!wallet.ready)setOpen(true);else wallet.connect()}}>{wallet.address?wallet.address.slice(0,4)+'…'+wallet.address.slice(-4):'Connect wallet'}</button>
- <Dialog open={open} onOpenChange={setOpen}><DialogContent className="neutral-dialog"><DialogTitle>{wallet.address?'Your Solana wallet':'Connect your wallet'}</DialogTitle><DialogDescription>{wallet.address?'Connected with Privy. Telegram verification is separate from wallet connection.':wallet.error||'Loading Privy. Please try again in a moment.'}</DialogDescription>{wallet.address&&<><p className="live-address">{wallet.address}</p>{onVerify&&!verified&&<button className="btn white" disabled={busy} onClick={async()=>{setBusy(true);try{await onVerify();setMessage('Wallet verified for this Telegram session.')}catch(e){setError(e instanceof Error?e.message:'Verification failed.')}finally{setBusy(false)}}}>Verify wallet for Telegram</button>}{verified&&<p className="field-help">Verified for your current Telegram session.</p>}<button className="btn outline" disabled={busy} onClick={()=>void testSignature()}>{busy?'Waiting for wallet…':'Test wallet signature'}</button><p className="field-help">Signs a test message only. This does not approve a transaction or verify a Telegram account.</p><button className="text-link" disabled={busy} onClick={()=>void wallet.disconnect().then(()=>setOpen(false)).catch(()=>setError('Disconnect from your wallet extension, then reload.'))}>Disconnect wallet</button></>}{(error||(wallet.address&&wallet.error))&&<p className="form-error" role="alert">{error||wallet.error}</p>}{message&&<p className="wallet-test-success" role="status">{message}</p>}</DialogContent></Dialog>
+export function WalletButton({className='btn outline small'}:{className?:string;onVerify?:()=>Promise<void>;verified?:boolean}){
+ const wallet=useTeleWallet();const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ useEffect(()=>{setOpen(false);setError('');},[wallet.address]);
+ async function disconnect(){setBusy(true);setError('');try{await wallet.disconnect();setOpen(false);}catch{setError('Could not disconnect. Please try again.');}finally{setBusy(false)}}
+ if(wallet.address)return <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
+  <DropdownMenuTrigger asChild><button type="button" className={className} aria-label={`Wallet ${wallet.address}. Open wallet menu`}>{wallet.address.slice(0,4)+'…'+wallet.address.slice(-4)}</button></DropdownMenuTrigger>
+  <DropdownMenuContent align="end" sideOffset={8} className="wallet-menu" aria-label="Wallet options">
+   <DropdownMenuItem disabled={busy} onSelect={e=>{e.preventDefault();void disconnect()}}><LogOut size={16}/>{busy?'Disconnecting…':'Disconnect'}</DropdownMenuItem>
+   {error&&<p className="wallet-menu-error" role="alert">{error}</p>}
+  </DropdownMenuContent>
+ </DropdownMenu>;
+ return <><button className={className} onClick={()=>{setError('');if(wallet.ready)wallet.connect();else setOpen(true)}}>Connect wallet</button>
+ <Dialog open={open} onOpenChange={setOpen}><DialogContent className="neutral-dialog"><DialogTitle>Connect your wallet</DialogTitle><DialogDescription>{wallet.error||'Loading Privy. Please try again in a moment.'}</DialogDescription></DialogContent></Dialog>
  {wallet.error&&!open&&<div className="toast" role="alert">{wallet.error}</div>}</>;
 }
