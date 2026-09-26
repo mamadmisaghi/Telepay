@@ -546,3 +546,22 @@ test('stored sweep destination survives a treasury configuration change',async()
  assert.equal(chainService({}).transferDestination(Buffer.from(tx.serialize()).toString('base64')),to.publicKey.toBase58());
  assert.throws(()=>configFromEnv({PREVIOUS_TREASURY_KEYPAIRS:'{}'}),/Invalid previous/);
 });
+
+test('bot rotation updates the verification link; a refreshed signed-in session stays visible but an expired withdrawal proof is rejected',async()=>{
+ const f=await fixture();f.config.telegramBotToken='test-new-bot';f.config.telegramBotUsername='UseTelePay_bot';f.config.telegramWebhookSecret='test-secret';
+ const app=await buildApp({...f,chain:{}});try{
+  const headers={origin:f.config.origin};const start=await app.inject({method:'POST',url:'/api/auth/wallet/start',headers,payload:{address:f.wallet.publicKey.toBase58()}});
+  const login=start.json(),binding=start.cookies.find(c=>c.name==='tp_wallet_login').value;
+  const signature=bs58.encode(nacl.sign.detached(new TextEncoder().encode(login.message),f.wallet.secretKey));
+  const finish=await app.inject({method:'POST',url:'/api/auth/wallet/finish',headers:{...headers,cookie:`tp_wallet_login=${binding}`},payload:{id:login.id,signature}});
+  const launcher=finish.json(),launchCookie=finish.cookies.find(c=>c.name==='tp_launch').value;
+  const bot=await app.inject({method:'POST',url:'/api/auth/bot/start',headers:{...headers,cookie:`tp_launch=${launchCookie}`,'x-launch-csrf':launcher.csrf},payload:{}});
+  assert.equal(bot.statusCode,200,bot.body);assert.match(bot.json().url,/^https:\/\/t\.me\/UseTelePay_bot\?start=/);
+  await f.db.query("INSERT INTO balances(handle,earned) VALUES('hamoon',2000000)");
+  await f.db.query("UPDATE sessions SET created_at=now()-interval '3 minutes' WHERE token_hash=$1",[hash('session2')]);
+  const cookie='tp_session=session2';const session=(await app.inject({url:'/api/session',headers:{cookie}})).json();
+  assert.equal(session.user.username,'hamoon');assert.deepEqual(session.wallets,[f.wallet.publicKey.toBase58()]);assert.equal(session.claimVerificationFresh,false);
+  const claim=await app.inject({method:'POST',url:'/api/claims',headers:{...headers,cookie,'x-csrf-token':'csrf2','idempotency-key':'stale-proof-claim-1234'},payload:{wallet:f.wallet.publicKey.toBase58(),amount:'1000000'}});
+  assert.equal(claim.statusCode,401,claim.body);assert.equal((await f.db.query('SELECT * FROM claims')).rowCount,0);
+ }finally{await app.close();await f.db.close();}
+});

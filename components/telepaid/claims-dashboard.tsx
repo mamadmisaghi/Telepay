@@ -7,7 +7,7 @@ import {CopyAddress} from './copy-address';
 import {useTeleWallet,WalletButton} from './wallet-context';
 
 type Profile={tokens:PublicToken[];nextOffset:number|null};
-export function ClaimsDashboard({go,onVerify}:{go:(route:string)=>void;onVerify:()=>void}){
+export function ClaimsDashboard({go,onVerify}:{go:(route:string)=>void;onVerify:(claimAfterVerification?:boolean)=>void}){
  const {session,refresh}=usePlatform(),wallet=useTeleWallet();
  const handle=session.user!.username;
  const [tokens,setTokens]=useState<PublicToken[]>([]),[next,setNext]=useState<number|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[photo,setPhoto]=useState<string|null>(null);
@@ -26,8 +26,8 @@ export function ClaimsDashboard({go,onVerify}:{go:(route:string)=>void;onVerify:
  return <div className="claims-dashboard">
   <section className="claim-identity" aria-label="Verified Telegram account">
    <div className="claim-person"><div className="claim-avatar">{photo?<img src={photo} alt="Telegram profile" onError={()=>setPhoto(null)}/>:<UserRound size={27}/>}</div><div><h2>{session.user!.name||handle}</h2><p>@{handle} <span className="claim-verified"><Check size={13}/> Verified</span></p></div></div>
-   <div className="claim-wallet"><span>{linked?'Connected receiving wallet':'Verified receiving wallet'}</span>{destination?<CopyAddress address={destination} label="wallet address"/>:<span>No wallet linked</span>}{!wallet.address?<WalletButton className="text-link"/>:!linked?<button className="text-link" onClick={onVerify}>Verify connected wallet</button>:null}</div>
-   <button className="text-link" onClick={onVerify}>Switch account</button>
+   <div className="claim-wallet"><span>{linked?'Connected receiving wallet':'Verified receiving wallet'}</span>{destination?<CopyAddress address={destination} label="wallet address"/>:<span>No wallet linked</span>}{!wallet.address?<WalletButton className="text-link"/>:!linked?<button className="text-link" onClick={()=>onVerify()}>Verify connected wallet</button>:null}</div>
+   <button className="text-link" onClick={()=>onVerify()}>Switch account</button>
   </section>
   <ClaimAccount onVerify={onVerify}/>
   <section className="claim-token-section" aria-labelledby="my-token-title">

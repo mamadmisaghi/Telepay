@@ -1,0 +1,9 @@
+# Telegram bot and Claim experience — 26 September 2026
+
+The production bot is @UseTelePay_bot (Telegram ID 8761490425), verified with Telegram getMe. The existing bot verification protocol, linked wallet checks, username-based balances, and server-side two-minute fresh claim proof remain in place. Railway holds the new token and username in its web service variables; no bot credential is committed to Git or bundled with the frontend.
+
+On Claims, a signed-in Telegram account and its linked wallet remain visibly verified after refresh. The button says Claim and, when the verification proof is still fresh, reserves the full available username balance in the existing payout queue. On a stale proof or changed wallet, clicking Claim opens the bot confirmation; if it returns with the same username and wallet, the previously requested claim is submitted automatically. An account mismatch never triggers payment. On a live token detail, the verified recipient sees Claim and can submit the combined claim directly from that page; other accounts see Verify & claim. The public account view also recognizes its signed-in recipient. The amount on the live token card remains that token's earned total; payout spends the combined username balance, as stated alongside the button.
+
+A closed verification dialog discards pending withdrawal intent. The server still requires a fresh Telegram proof bound to the same session and a wallet linked during that proof. A 24-hour sign-in is not a 24-hour authorization to withdraw, because a Telegram username can change hands.
+
+Validation: Telegram getMe accepted the new token and reported @UseTelePay_bot; the previous bot had the production webhook while the new one did not before cutover. Existing 41 backend checks and an additional focused rotation/stale-proof regression passed. TypeScript and the Railway Vite build passed. Deployment and webhook receipts are recorded after cutover.

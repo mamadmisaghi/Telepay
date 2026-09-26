@@ -18,7 +18,7 @@ export function configFromEnv(env = process.env) {
     staticDir: env.STATIC_DIR || '',
     databaseUrl: secret(env, 'DATABASE_URL'), encryptionKey: secret(env, 'KEY_ENCRYPTION_KEY'),
     telegramClientId: env.TELEGRAM_CLIENT_ID || '', telegramClientSecret: secret(env, 'TELEGRAM_CLIENT_SECRET'),
-    telegramBotToken: secret(env,'TELEGRAM_BOT_TOKEN'), telegramBotUsername: env.TELEGRAM_BOT_USERNAME || 'TelePayFunBot', telegramWebhookSecret: secret(env,'TELEGRAM_WEBHOOK_SECRET'),
+    telegramBotToken: secret(env,'TELEGRAM_BOT_TOKEN'), telegramBotUsername: env.TELEGRAM_BOT_USERNAME || 'UseTelePay_bot', telegramWebhookSecret: secret(env,'TELEGRAM_WEBHOOK_SECRET'),
     rpcUrl: secret(env, 'SOLANA_RPC_URL'), cluster: env.SOLANA_CLUSTER || 'mainnet-beta', suffix,
     feeSharingEnabled:env.FEE_SHARING_ENABLED==='true',launchLookupTables:(env.LAUNCH_LOOKUP_TABLES||'').split(',').filter(Boolean),
     telegramApiId:Number(env.TELEGRAM_API_ID||0),telegramApiHash:secret(env,'TELEGRAM_API_HASH'),telegramSearchSession:secret(env,'TELEGRAM_SEARCH_SESSION'),
@@ -34,7 +34,7 @@ export function configFromEnv(env = process.env) {
   };
 }
 export function readiness(c) {
-  return {telegram: !!((c.telegramBotToken && c.telegramWebhookSecret)||(c.telegramClientId && c.telegramClientSecret)), botLogin:!!(c.telegramBotToken&&c.telegramWebhookSecret), integrated:true, wallet: !!c.privyAppId, privyAppId:c.privyAppId,
+  return {telegram: !!((c.telegramBotToken && c.telegramWebhookSecret)||(c.telegramClientId && c.telegramClientSecret)), botLogin:!!(c.telegramBotToken&&c.telegramWebhookSecret), telegramBotUsername:c.telegramBotUsername, integrated:true, wallet: !!c.privyAppId, privyAppId:c.privyAppId,
     launch: !!(c.launchesEnabled && c.suffix && c.rpcUrl && c.encryptionKey),
     claims: !!(c.payoutsEnabled && c.rpcUrl && c.treasurySecret && c.operatorSecret),
     suffix: c.suffix || null, mode: c.uiMode || 'live', cluster: c.cluster};
