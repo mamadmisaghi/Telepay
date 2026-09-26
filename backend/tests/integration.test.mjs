@@ -358,7 +358,7 @@ test('market indexing persists actual trades once, excludes failures and reports
  const f=await fixture();const {marketService}=await import('../src/market.mjs');const snapshot=JSON.parse(await readFile(new URL('./fixtures/atomic-simulation.json',import.meta.url),'utf8'));
  try{
   const token={id:'launch1',mint:snapshot.mint};let fetches=0;
-  const chain={checkNetwork:async()=>{},sdk:{fetchBondingCurve:async()=>({complete:false,virtualQuoteReserves:30000000000n,virtualTokenReserves:1000000000000000n})},connection:{getSignaturesForAddress:async()=>[{signature:snapshot.signature,err:null}],getTransaction:async()=>{fetches++;return snapshot;}}};
+  const chain={checkNetwork:async()=>{},sdk:{fetchBondingCurve:async()=>({complete:false,virtualQuoteReserves:30000000000n,virtualTokenReserves:1000000000000000n})},connection:{getSignaturesForAddress:async()=>[{signature:snapshot.signature,err:null}],getTransaction:async(_signature,options)=>{assert.equal(options.maxSupportedTransactionVersion,1);fetches++;return snapshot;}}};
   const service=marketService({db:f.db,chain});const first=await service.load(token,60);assert.equal(first.trades.length,1);assert.ok(first.spotPriceSol>0);assert.equal(first.stale,false);
   const second=await service.load(token,300);assert.equal(second.trades.length,1);assert.equal(fetches,1);
   await marketService({db:f.db,chain}).load(token,60);assert.equal(fetches,1);assert.equal((await f.db.query('SELECT * FROM market_trades')).rowCount,1);

@@ -32,6 +32,9 @@
 - Read-only mainnet simulation of the production chain builder, max 32-byte name,
   10-character ticker and 0.001 SOL requested buy: success, 1220-byte transaction,
   3 instructions, 197743 compute units. Real SDK decoding found the buy event.
+- Live RPC testing identified version 1 trades; the market reader now explicitly
+  accepts version 1, supported by the installed backend Solana SDK. Reading the
+  existing Test token successfully decoded 12 recent buy/sell events.
 - No chain transaction was broadcast and no SOL was spent during these checks.
 
 ## Remaining limitations

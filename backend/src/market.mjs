@@ -56,7 +56,7 @@ export function marketService({db,chain}){
   // Bound RPC work and isolate market indexing from financial settlement.
   let next=0;await Promise.all(Array.from({length:3},async()=>{while(next<todo.length){
    const s=todo[next++];
-   const tx=s.err?null:await chain.connection.getTransaction(s.signature,{commitment:'finalized',maxSupportedTransactionVersion:0});
+   const tx=s.err?null:await chain.connection.getTransaction(s.signature,{commitment:'finalized',maxSupportedTransactionVersion:1});
    if(!s.err&&!tx)throw new Error('Finalized transaction is not available yet');
    const trades=parseTrades(tx,token.mint,s.signature);
    await db.transaction(async client=>{
@@ -80,7 +80,7 @@ export function marketService({db,chain}){
   const trades=rows.map(r=>({signature:r.signature,eventIndex:r.event_index,slot:Number(r.slot),time:Math.floor(new Date(r.traded_at).getTime()/1000),side:r.side,wallet:r.wallet,solLamports:r.sol_lamports,tokenRaw:r.token_raw,priceSol:Number(r.price_sol)}));
   return {updatedAt:state.updated_at,stale:stale||Date.now()-new Date(state.updated_at).getTime()>45000,indexing:state.backlog,historyScope:'recent',spotPriceSol:state.spot_price_sol===null?null:Number(state.spot_price_sol),lastTradePriceSol:trades[0]?.priceSol??null,graduated:state.graduated,candles:candleSeries(trades,interval),trades:trades.slice(0,100)};
  }
- return {load};
+ return {load,sync};
 }
 export function marketRoutes(app,dependencies){
  const service=marketService(dependencies);
