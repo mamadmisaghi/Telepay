@@ -98,3 +98,14 @@ Local automated tests are not evidence that a mainnet launch or payout occurred.
   generic and channel previews, public detail projections, and buy amount/access/
   replay guards. TypeScript and Railway Vite builds passed. No mainnet transaction
   or purchase was submitted by the agent. Browser/deployment checks follow rollout.
+
+
+Rollout checks: web `0e1f6781-d334-4224-a59e-7df0ca33b3a1` and worker
+`6e0a5ee2-c2a5-430d-9015-8ad813150597` reached SUCCESS on runtime commit
+`6c6e874270103d855a1680a75fd0626b74c8c17f`. Health returned 200. The actual
+Test token appeared first under Recent and in Explore alongside retained sample
+cards; clicking opened its internal token page. Sidebar collapse/expand passed.
+The production recipient endpoint resolved @gofindahouse with its actual public
+name and photo. A read-only mainnet simulation of a 0.001 SOL buy for the existing
+Test mint passed (808-byte unsigned transaction); nothing was broadcast. Actual
+Phantom buy approval/finalization remains user-driven and was not performed here.
