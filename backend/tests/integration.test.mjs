@@ -17,6 +17,8 @@ async function fixture(){
  await pg.exec(await readFile(new URL('../migrations/002_bot_and_buys.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/003_atomic_market.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/004_sharing_analytics.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/005_worker_operations.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/006_treasury_rotation.sql',import.meta.url),'utf8'));
  const adapt=client=>({query:async(sql,args)=>{if(sql.startsWith('SELECT pg_'))return {rows:[],rowCount:1};const r=await client.query(sql,args);return {...r,rowCount:Math.max(r.affectedRows||0,r.rows.length)};}});
  const db={...adapt(pg),transaction:fn=>pg.transaction(tx=>fn(adapt(tx))),close:()=>pg.close()};
  const config=configFromEnv({PUBLIC_ORIGIN:'http://localhost:8080',TELEGRAM_CLIENT_ID:'123',TELEGRAM_CLIENT_SECRET:'test-secret',PAYOUTS_ENABLED:'true',KEY_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')});
@@ -460,4 +462,87 @@ test('recipient workspace lists zero-fee tokens from other launchers and paginat
   assert.equal((await app.inject('/api/public/profile/hamoon2')).json().tokens.length,0);
   assert.equal((await app.inject('/api/public/profile/hamoon?offset=-10')).json().tokens.length,48);
  }finally{await app.close();await f.db.close()}
+});
+
+test('worker batches cover more than fifty tokens, persist progress, and retry failed markets next cycle',async()=>{
+ const {marketBatch}=await import('../src/worker-batches.mjs');const f=await fixture();
+ try{
+  await f.db.query("INSERT INTO mint_pool(address,secret_encrypted,suffix,status) SELECT mint||n,'test','TeLe','consumed' FROM launches CROSS JOIN generate_series(1,60) n WHERE id='launch1'");
+  await f.db.query("INSERT INTO launches(id,idempotency_key,owner_id,recipient_handle,wallet,mint,creator,creator_secret,name,symbol,description,metadata_uri,image_uri,status,confirmed_at) SELECT 'token-'||lpad(n::text,3,'0'),'round-key-'||n,'1','hamoon',wallet,mint||n,creator||n,'encrypted','Token',symbol,description,metadata_uri,image_uri,'confirmed',confirmed_at FROM launches CROSS JOIN generate_series(1,60) n WHERE id='launch1'");
+  const seen=new Set(),errors=[];let fail=true;const markets={sync:async t=>{seen.add(t.id);if(t.id==='launch1'&&fail)throw new Error('RPC unavailable')}};
+  for(let i=0;i<4;i++)await marketBatch({db:f.db,markets,log:s=>errors.push(s)});
+  assert.equal(seen.size,61);assert.equal(errors.length,1);
+  assert.equal((await f.db.query("SELECT last_id FROM worker_cursors WHERE kind='market'")).rows[0].last_id,'token-060');
+  fail=false;seen.clear();await marketBatch({db:f.db,markets,log:s=>errors.push(s)});assert.ok(seen.has('launch1'));assert.equal(errors.length,1);
+ }finally{await f.db.close()}
+});
+
+test('generated mint imports are encrypted, reject on-chain reuse and never reset reserved keys',async()=>{
+ const {storeGeneratedMint}=await import('../src/mint-refill.mjs');const f=await fixture();const key=Keypair.generate(),address=key.publicKey.toBase58();f.config.suffix=address.slice(-4);
+ const args={db:f.db,config:f.config,secret:key.secretKey,chain:{connection:{getAccountInfo:async()=>null}}};
+ try{
+  assert.equal(await storeGeneratedMint(args),true);
+  const stored=(await f.db.query('SELECT * FROM mint_pool WHERE address=$1',[address])).rows[0];assert.notEqual(stored.secret_encrypted,bs58.encode(key.secretKey));assert.deepEqual(decrypt(stored.secret_encrypted,f.config.encryptionKey,`mint:${address}`),Buffer.from(key.secretKey));
+  await f.db.query("UPDATE mint_pool SET status='reserved' WHERE address=$1",[address]);assert.equal(await storeGeneratedMint(args),false);assert.equal((await f.db.query('SELECT status FROM mint_pool WHERE address=$1',[address])).rows[0].status,'reserved');
+  await assert.rejects(storeGeneratedMint({...args,chain:{connection:{getAccountInfo:async()=>({})}}}),/already exists/);
+ }finally{await f.db.close()}
+});
+
+test('operations report low reserves without changing financial switches or balances',async()=>{
+ const {operationalCheck}=await import('../src/operations.mjs');const f=await fixture();f.config.operatorSecret=bs58.encode(Keypair.generate().secretKey);f.config.treasurySecret=bs58.encode(Keypair.generate().secretKey);f.config.collectionsEnabled=false;f.config.payoutsEnabled=false;
+ try{
+  const result=await operationalCheck({db:f.db,config:f.config,chain:{connection:{getBalance:async()=>0}},log:()=>{}});
+  assert.ok(result.alerts.includes('mint_pool_low'));assert.ok(result.alerts.includes('operator_unfunded'));assert.equal(result.payoutsEnabled,false);assert.equal(result.collectionsEnabled,false);assert.equal((await f.db.query('SELECT * FROM operational_status')).rowCount,1);assert.equal((await f.db.query('SELECT * FROM jobs')).rowCount,0);
+ }finally{await f.db.close()}
+});
+
+test('treasury rotation persists a single wire, resumes across a second rotation, and never credits fees twice',async()=>{
+ const {consolidateTreasuries}=await import('../src/treasuries.mjs');const f=await fixture();
+ try{
+  const old=Keypair.generate(),current=Keypair.generate(),next=Keypair.generate(),operator=Keypair.generate();
+  const config={...f.config,collectionsEnabled:true,treasurySecret:bs58.encode(current.secretKey),previousTreasurySecrets:[bs58.encode(old.secretKey)]};
+  let balance=10000000,finalized=false,builds=0,sends=0;
+  const chain={connection:{getBalance:async key=>key.equals(old.publicKey)?balance:0},transfer:async(from,to,amount)=>{
+   builds++;assert.equal(from.publicKey.toBase58(),old.publicKey.toBase58());assert.equal(to,current.publicKey.toBase58());assert.equal(amount,10000000n);
+   return {tx:{signatures:[new Uint8Array(64).fill(13)]},wire:'durable-rotation',lastValidHeight:99};
+  },status:async()=>({state:finalized?'confirmed':'pending'}),send:async wire=>{assert.equal(wire,'durable-rotation');sends++;throw Error('timeout')},receivedBy:async(sig,address)=>{assert.equal(address,current.publicKey.toBase58());return {lamports:10000000n}}};
+  const run=()=>consolidateTreasuries({db:f.db,chain,config,operator,treasury:current});
+  await run();await run();await run();assert.equal(builds,1);assert.equal(sends,2);
+  finalized=true;balance=0;config.collectionsEnabled=false;config.treasurySecret=bs58.encode(next.secretKey);
+  await consolidateTreasuries({db:f.db,chain,config,operator,treasury:next});
+  assert.equal((await f.db.query('SELECT status FROM treasury_transfers')).rows[0].status,'confirmed');
+  assert.equal((await f.db.query('SELECT * FROM fee_events')).rowCount,0);assert.equal(builds,1);
+ }finally{await f.db.close()}
+});
+
+test('treasury consolidation rejects mismatched receipts and disabled collections cannot start transfers',async()=>{
+ const {consolidateTreasuries}=await import('../src/treasuries.mjs');const f=await fixture();
+ try{
+  const old=Keypair.generate(),current=Keypair.generate(),operator=Keypair.generate();const config={...f.config,collectionsEnabled:false,treasurySecret:bs58.encode(current.secretKey),previousTreasurySecrets:[bs58.encode(old.secretKey)]};
+  const chain={connection:{getBalance:async()=>{throw Error('Must not start transfers')}},status:async()=>({state:'confirmed'}),receivedBy:async()=>({lamports:9n})};
+  await consolidateTreasuries({db:f.db,chain,config,operator,treasury:current});
+  await f.db.query("INSERT INTO treasury_transfers(id,source,destination,amount,transaction_base64,signature,last_valid_height) VALUES('move',$1,$2,10,'wire','signature',99)",[old.publicKey.toBase58(),current.publicKey.toBase58()]);
+  await assert.rejects(consolidateTreasuries({db:f.db,chain,config,operator,treasury:current}),/receipt mismatch/);
+  assert.equal((await f.db.query('SELECT status FROM treasury_transfers')).rows[0].status,'submitted');
+ }finally{await f.db.close()}
+});
+
+test('old locked sharing destinations remain collectible after treasury rotation',async()=>{
+ const f=await fixture();try{
+  const old=Keypair.generate(),treasury=Keypair.generate(),operator=Keypair.generate();
+  Object.assign(f.config,{collectionsEnabled:true,treasurySecret:bs58.encode(treasury.secretKey),operatorSecret:bs58.encode(operator.secretKey),previousTreasurySecrets:[bs58.encode(old.secretKey)]});
+  await f.db.query("UPDATE launches SET fee_mode='sharing-v1',fee_treasury=$1 WHERE id='launch1'",[old.publicKey.toBase58()]);
+  await f.db.query("INSERT INTO jobs(id,kind,launch_id) VALUES('old-collect','collect','launch1')");let built=0;
+  const chain={connection:{getBalance:async()=>0},sharingCollection:async(mint,destination)=>{assert.equal(destination,old.publicKey.toBase58());built++;return {tx:{signatures:[new Uint8Array(64).fill(14)]},wire:'old-collect-wire',lastValidHeight:99}},status:async()=>({state:'confirmed'}),sharingReceived:async()=>({lamports:10000n,slot:1}),verifySharing:async()=>{},sdk:{getCreatorVaultBalanceBothPrograms:async()=>({toString:()=> '0'})}};
+  await workerTick({...f,chain});assert.equal(built,1);
+  assert.equal((await f.db.query('SELECT earned FROM balances')).rows[0].earned,'8000');
+  assert.equal((await f.db.query("SELECT status FROM jobs WHERE id='old-collect'")).rows[0].status,'confirmed');
+ }finally{await f.db.close()}
+});
+
+test('stored sweep destination survives a treasury configuration change',async()=>{
+ const {chainService}=await import('../src/chain.mjs');const from=Keypair.generate(),to=Keypair.generate(),operator=Keypair.generate();
+ const tx=new VersionedTransaction(new TransactionMessage({payerKey:operator.publicKey,recentBlockhash:Keypair.generate().publicKey.toBase58(),instructions:[SystemProgram.transfer({fromPubkey:from.publicKey,toPubkey:to.publicKey,lamports:1000})]}).compileToV0Message());
+ assert.equal(chainService({}).transferDestination(Buffer.from(tx.serialize()).toString('base64')),to.publicKey.toBase58());
+ assert.throws(()=>configFromEnv({PREVIOUS_TREASURY_KEYPAIRS:'{}'}),/Invalid previous/);
 });

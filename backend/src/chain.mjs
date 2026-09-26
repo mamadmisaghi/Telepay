@@ -1,4 +1,4 @@
-import {Connection,Keypair,PublicKey,TransactionMessage,VersionedTransaction,SystemProgram,ComputeBudgetProgram} from '@solana/web3.js';
+import {Connection,Keypair,PublicKey,TransactionMessage,VersionedTransaction,SystemProgram,SystemInstruction,ComputeBudgetProgram} from '@solana/web3.js';
 import {PUMP_SDK,OnlinePumpSdk,getBuyTokenAmountFromSolAmount,creatorVaultPda,feeSharingConfigPda,canonicalPumpPoolPda} from '@pump-fun/pump-sdk';
 import BN from 'bn.js';
 import {coinCreatorVaultAtaPda,coinCreatorVaultAuthorityPda} from '@pump-fun/pump-swap-sdk';
@@ -96,6 +96,11 @@ export function chainService(config) {
    return build(instructions,operator.publicKey,[creator,operator]);
   },
   async transfer(from,to,amount,operator){return build([SystemProgram.transfer({fromPubkey:from.publicKey,toPubkey:new PublicKey(to),lamports:BigInt(amount)})],operator.publicKey,[from,operator]);},
+  transferDestination(wire){
+   const tx=VersionedTransaction.deserialize(Buffer.from(wire,'base64'));
+   const transfers=TransactionMessage.decompile(tx.message).instructions.filter(i=>i.programId.equals(SystemProgram.programId)).map(i=>SystemInstruction.decodeTransfer(i));
+   need(transfers.length===1,500,'Unexpected stored transfer');return transfers[0].toPubkey.toBase58();
+  },
   async send(wire){await checkNetwork();return connection.sendRawTransaction(Buffer.from(wire,'base64'),{skipPreflight:false,maxRetries:3});},
   async status(signature,lastValidHeight){
    await checkNetwork();const {value:[result]}=await connection.getSignatureStatuses([signature],{searchTransactionHistory:true});

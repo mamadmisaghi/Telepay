@@ -9,6 +9,8 @@ export function configFromEnv(env = process.env) {
   const suffix = env.MINT_SUFFIX || 'TeLe';
   if(suffix !== 'TeLe') throw new Error('All TelePaid launches must use the approved TeLe suffix');
   if (suffix) assertValidSuffix(suffix);
+  const previousTreasurySecrets=JSON.parse(secret(env,'PREVIOUS_TREASURY_KEYPAIRS')||'[]');
+  if(!Array.isArray(previousTreasurySecrets)||previousTreasurySecrets.length>16||previousTreasurySecrets.some(k=>typeof k!=='string'||!k))throw new Error('Invalid previous treasury configuration');
   return {
     origin, production: env.NODE_ENV === 'production', port: Number(env.PORT || 3001),
     privyAppId: env.PRIVY_APP_ID || '',
@@ -21,8 +23,12 @@ export function configFromEnv(env = process.env) {
     feeSharingEnabled:env.FEE_SHARING_ENABLED==='true',launchLookupTables:(env.LAUNCH_LOOKUP_TABLES||'').split(',').filter(Boolean),
     telegramApiId:Number(env.TELEGRAM_API_ID||0),telegramApiHash:secret(env,'TELEGRAM_API_HASH'),telegramSearchSession:secret(env,'TELEGRAM_SEARCH_SESSION'),
     treasurySecret: secret(env, 'TREASURY_KEYPAIR'), operatorSecret: secret(env, 'OPERATOR_KEYPAIR'),
+    previousTreasurySecrets,
     launchesEnabled: env.LAUNCHES_ENABLED === 'true', payoutsEnabled: env.PAYOUTS_ENABLED === 'true', collectionsEnabled: env.COLLECTIONS_ENABLED === 'true',
-    metadataDir: env.METADATA_DIR || './data/metadata', vanityTarget: Number(env.VANITY_POOL_TARGET || 20),
+    metadataDir: env.METADATA_DIR || './data/metadata', vanityTarget: Math.max(1,Math.min(100,Number(env.VANITY_POOL_TARGET)||20)),
+    vanityAuto:env.VANITY_AUTO_REFILL==='true',vanityBinary:env.VANITY_BINARY||'/usr/local/bin/telepaid-vanity',
+    vanityBudgetSeconds:Math.max(10,Math.min(300,Number(env.VANITY_BUDGET_SECONDS)||60)),
+    vanityIntervalMs:Math.max(60000,Number(env.VANITY_INTERVAL_MS)||300000),
     minimumClaim: BigInt(env.MINIMUM_CLAIM_LAMPORTS || '1000000'),
     collectionThreshold: BigInt(env.COLLECTION_THRESHOLD_LAMPORTS || '1000000'),
   };
