@@ -214,6 +214,24 @@ test('public endpoints hide secrets; launch and claim switches fail closed; logo
   assert.equal((await app.inject({url:'/api/session',headers})).json().user,null);
  }finally{await app.close();await f.db.close()}
 });
+test('public activity uses finalized fee events and confirmed claims without assigning a claim to a token',async()=>{
+ const f=await fixture();const app=await buildApp({...f,chain:{}});
+ try{
+  await recordCollection(f.db,{eventId:'activity-fee',launchId:'launch1',recipientHandle:'hamoon',signature:'collection-tx',lamports:1250000000n,slot:123});
+  const base={userId:'2',handle:'hamoon',wallet:f.wallet.publicKey.toBase58(),minimum:1n,sessionHash:hash('session2')};
+  const paid=await reserveClaim(f.db,{...base,amount:500000000n,idempotencyKey:'activity-paid'});
+  await finishClaim(f.db,paid.id,{success:true,signature:'payout-tx'});
+  await f.db.query("UPDATE sessions SET claim_used=false,created_at=now() WHERE user_id='2'");
+  await reserveClaim(f.db,{...base,amount:250000000n,idempotencyKey:'activity-pending'});
+  const response=await app.inject('/api/public/analytics');assert.equal(response.statusCode,200,response.body);
+  const a=response.json();assert.equal(a.collected,'1250000000');assert.equal(a.recipients,'1000000000');assert.equal(a.project,'250000000');
+  assert.equal(a.claimed,'500000000');assert.equal(a.unclaimed,'500000000');assert.equal(a.pending,'250000000');
+  assert.equal(a.recent.length,1);assert.equal(a.recent[0].launch_id,'launch1');assert.equal(a.recent[0].token_name,'Token');
+  assert.equal(a.recentClaims.length,1);assert.equal(a.recentClaims[0].handle,'hamoon');assert.equal(a.recentClaims[0].signature,'payout-tx');assert.equal(a.recentClaims[0].launch_id,undefined);
+  assert.equal(a.topTokens[0].earned_lamports,'1000000000');assert.equal(a.topRecipients[0].handle,'hamoon');assert.equal(a.daily.length,1);
+  assert.ok(!response.body.includes('creator_secret'));assert.ok(!response.body.includes(f.wallet.publicKey.toBase58()));
+ }finally{await app.close();await f.db.close()}
+});
 
 test('wallet disconnect clears both Telegram and launcher sessions, and logout is idempotent without a Telegram session',async()=>{
  const f=await fixture();const app=await buildApp({...f,chain:{}});try{

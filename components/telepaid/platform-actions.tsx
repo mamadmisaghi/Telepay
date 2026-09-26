@@ -1,7 +1,7 @@
 'use client';
 import {createContext,useContext,useEffect,useRef,useState,useCallback,type ReactNode} from 'react';
 import bs58 from 'bs58';
-import {fromPublicToken,type Token,type PublicToken} from '@/app/data';
+import {fromPublicToken,type Token,type PublicToken,type PublicAnalytics} from '@/app/data';
 import {useTeleWallet,WalletButton} from './wallet-context';
 import {rememberVerifiedSession,signOutBrowser,telegramSessionVersionKey,walletDisconnectedKey} from './sign-out';
 
@@ -25,14 +25,18 @@ export async function submitAvailableClaim(wallet:string,recipient:string,minimu
  return request<Claim>('/api/claims',{wallet,amount},{'x-csrf-token':session.csrf||'','idempotency-key':key});
 }
 function lamports(value:string){if(!/^\d+(\.\d{1,9})?$/.test(value||'0'))throw new Error('Use a SOL amount with up to 9 decimal places');const [a,b='']=(value||'0').split('.');return (BigInt(a)*1000000000n+BigInt(b.padEnd(9,'0'))).toString();}
-const PlatformContext=createContext<{runtime:Runtime|null;session:Session;refresh:()=>Promise<void>;liveTokens:Token[];tokensError:string;refreshTokens:()=>Promise<void>}>({runtime:null,session:{user:null},refresh:async()=>{},liveTokens:[],tokensError:'',refreshTokens:async()=>{}});
+const PlatformContext=createContext<{runtime:Runtime|null;session:Session;refresh:()=>Promise<void>;liveTokens:Token[];tokensError:string;refreshTokens:()=>Promise<void>;analytics:PublicAnalytics|null;analyticsError:string;refreshAnalytics:()=>Promise<void>}>({runtime:null,session:{user:null},refresh:async()=>{},liveTokens:[],tokensError:'',refreshTokens:async()=>{},analytics:null,analyticsError:'',refreshAnalytics:async()=>{}});
 export const usePlatform=()=>useContext(PlatformContext);
 export function PlatformProvider({children}:{children:ReactNode}){
  const [runtime,setRuntime]=useState<Runtime|null>(null),[session,setSession]=useState<Session>({user:null});
  const [liveTokens,setLiveTokens]=useState<Token[]>([]),[tokensError,setTokensError]=useState('');
+ const [analytics,setAnalytics]=useState<PublicAnalytics|null>(null),[analyticsError,setAnalyticsError]=useState('');
  const sessionEpoch=useRef(0),detachedLogout=useRef(false);
  const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
+ const refreshAnalytics=useCallback(async()=>{try{setAnalytics(await request<PublicAnalytics>('/api/public/analytics'));setAnalyticsError('');}catch{setAnalyticsError('Activity could not be loaded. Try again.');}},[]);
  useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>void refreshTokens(),30000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens]);
+ useEffect(()=>{if(!runtime?.integrated)return;void refreshAnalytics();const timer=setInterval(()=>void refreshAnalytics(),30000);const focus=()=>void refreshAnalytics();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshAnalytics]);
+ useEffect(()=>{if(runtime?.integrated&&session.balance?.settled!==undefined)void refreshAnalytics()},[runtime?.integrated,session.balance?.settled,refreshAnalytics]);
  const refresh=useCallback(async()=>{
   const epoch=sessionEpoch.current;
   let disconnected=false;try{disconnected=localStorage.getItem(walletDisconnectedKey)==='1'}catch{}
@@ -56,7 +60,7 @@ export function PlatformProvider({children}:{children:ReactNode}){
   const timer=setInterval(sync,60000);window.addEventListener('focus',sync);
   return()=>{clearInterval(timer);window.removeEventListener('focus',sync)};
  },[refresh]);
- return <PlatformContext.Provider value={{runtime,session,refresh,liveTokens,tokensError,refreshTokens}}>{children}</PlatformContext.Provider>;
+ return <PlatformContext.Provider value={{runtime,session,refresh,liveTokens,tokensError,refreshTokens,analytics,analyticsError,refreshAnalytics}}>{children}</PlatformContext.Provider>;
 }
 function useOperation(){
  const [busy,setBusy]=useState(false),[error,setError]=useState('');const lock=useRef(false);

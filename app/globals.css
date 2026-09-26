@@ -130,3 +130,12 @@ img.detail-art { object-fit:cover; flex-shrink:0; }
 .profile-avatar:is(img){object-fit:cover;background:var(--card)}
 .profile-avatar-placeholder{display:grid;place-items:center;background:#243849;color:var(--ice)}
 .profiles-load-more{display:flex;margin:24px auto 0}
+.activity-empty{border:1px solid var(--border);border-radius:13px;background:var(--card);padding:24px 20px;color:var(--muted-foreground);font-size:13px;line-height:1.6;min-width:0}
+.activity-empty .text-link{margin-left:8px}
+.activity-avatar{flex:none;display:grid;place-items:center;width:35px;height:35px;border-radius:50%;background:var(--accent);color:var(--ice)}
+.ranking-list button>.activity-avatar{width:35px;color:var(--ice)}
+.ranking-list .round-avatar,.trending-strip .round-avatar,.ledger-person .round-avatar{object-fit:cover;flex:none;background:var(--accent)}
+.ranking-list button>div{min-width:0}.ranking-list button>div strong,.ledger-person>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.ranking-list button>b{white-space:nowrap;font-variant-numeric:tabular-nums}
+.ledger-person{max-width:240px;min-width:0}.ledger-person>span:last-child{display:block}
+.activity-chart-empty{height:calc(100% - 25px);display:grid;place-items:center;color:var(--muted-foreground);border-bottom:1px solid var(--border);font-size:13px;text-align:center;padding:16px}

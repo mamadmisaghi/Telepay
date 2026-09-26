@@ -68,10 +68,14 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
  app.get('/api/public/analytics' ,async()=>{
   const {rows:[fees]}=await db.query('SELECT COALESCE(sum(gross),0)::text AS collected,COALESCE(sum(recipient),0)::text AS recipients,COALESCE(sum(project),0)::text AS project FROM fee_events');
   const {rows:[claims]}=await db.query("SELECT COALESCE(sum(amount),0)::text AS claimed FROM claims WHERE status='confirmed'");
+  const {rows:[balances]}=await db.query('SELECT COALESCE(sum(earned-settled),0)::text AS unclaimed,COALESCE(sum(reserved),0)::text AS pending FROM balances');
   const {rows:[count]}=await db.query("SELECT count(*)::int AS tokens FROM launches WHERE status='confirmed'");
-  const {rows:daily}=await db.query("SELECT date_trunc('day',received_at) AS day,sum(gross)::text AS collected FROM fee_events WHERE received_at>now()-interval '30 days' GROUP BY 1 ORDER BY 1");
-  const {rows:recent}=await db.query('SELECT signature,recipient_handle,gross::text,recipient::text,project::text,received_at FROM fee_events ORDER BY received_at DESC LIMIT 20');
-  return {...fees,...claims,...count,daily,recent};
+  const {rows:daily}=await db.query("SELECT date_trunc('day',received_at) AS day,sum(gross)::text AS collected FROM fee_events WHERE received_at>=date_trunc('day',now() AT TIME ZONE 'UTC')-interval '29 days' GROUP BY 1 ORDER BY 1");
+  const {rows:recent}=await db.query("SELECT e.event_id,e.signature,e.recipient_handle,e.gross::text,e.recipient::text,e.project::text,e.received_at,l.id AS launch_id,l.name AS token_name,l.image_uri AS token_image FROM fee_events e JOIN launches l ON l.id=e.launch_id WHERE l.status='confirmed' ORDER BY e.received_at DESC,e.event_id DESC LIMIT 20");
+  const {rows:recentClaims}=await db.query("SELECT id,handle,amount::text,signature,confirmed_at FROM claims WHERE status='confirmed' ORDER BY confirmed_at DESC,id DESC LIMIT 20");
+  const {rows:topTokens}=await db.query("SELECT l.id,l.name,l.symbol,l.image_uri,l.recipient_handle,COALESCE(sum(e.recipient),0)::text AS earned_lamports FROM launches l LEFT JOIN fee_events e ON e.launch_id=l.id WHERE l.status='confirmed' GROUP BY l.id,l.name,l.symbol,l.image_uri,l.recipient_handle ORDER BY COALESCE(sum(e.recipient),0) DESC,l.confirmed_at DESC LIMIT 10");
+  const {rows:topRecipients}=await db.query("SELECT l.recipient_handle AS handle,COALESCE(b.earned,0)::text AS earned_lamports FROM (SELECT DISTINCT recipient_handle FROM launches WHERE status='confirmed') l LEFT JOIN balances b ON b.handle=l.recipient_handle ORDER BY COALESCE(b.earned,0) DESC,l.recipient_handle LIMIT 10");
+  return {...fees,...claims,...balances,...count,daily,recent,recentClaims,topTokens,topRecipients};
  });
  app.get('/api/public/profile/:handle',async req=>{
   const handle=normalizeHandle(req.params.handle);need(/^[a-z][a-z0-9_]{3,31}$/.test(handle),400,'Invalid Telegram username');

@@ -13,7 +13,7 @@ The user approved the Graphite Blue palette mockup (option 1, 2026-09-26). Prese
 - Split hero: left headline and launch, right Telegram claim steps. Slim 80/20/Solana band; compact navigation shortcuts.
 - Preserve token grid, Telegram profiles, recent claims, rankings, collections and settlements. Avoid duplicate large preview grids.
 - Final identity uses the supplied white T / blue arrow PNG; supplied blue square is the favicon.
-- Net earnings are blue; gross collections and project revenue separately labeled. Sample records always marked.
+- Net earnings are blue; gross collections and project revenue separately labeled. Public activity displays confirmed launches, finalized collections, and confirmed settlements only. Empty sections never display invented records.
 - Product views retain all core detail. Docs now cover the Telegram mechanism with a full contents list.
 
 Assets: public/telepaid-mark.png, public/telepaid-brand-sheet.png, public/telepaid-icon.png, existing public/token-art.png.
