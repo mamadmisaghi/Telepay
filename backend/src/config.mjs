@@ -14,6 +14,7 @@ export function configFromEnv(env = process.env) {
   return {
     origin, production: env.NODE_ENV === 'production', port: Number(env.PORT || 3001),
     sitePaused: env.SITE_PAUSED === 'true',
+    officialFastWatch: env.OFFICIAL_FAST_WATCH === 'true',
     privyAppId: env.PRIVY_APP_ID || '',
     uiMode: env.UI_MODE === 'preview' ? 'preview' : 'live',
     staticDir: env.STATIC_DIR || '',
@@ -35,7 +36,7 @@ export function configFromEnv(env = process.env) {
   };
 }
 export function readiness(c) {
-  return {telegram: !!((c.telegramBotToken && c.telegramWebhookSecret)||(c.telegramClientId && c.telegramClientSecret)), botLogin:!!(c.telegramBotToken&&c.telegramWebhookSecret), telegramBotUsername:c.telegramBotUsername, integrated:true, wallet: !!c.privyAppId, privyAppId:c.privyAppId,
+  return {telegram: !!((c.telegramBotToken && c.telegramWebhookSecret)||(c.telegramClientId && c.telegramClientSecret)), botLogin:!!(c.telegramBotToken&&c.telegramWebhookSecret), telegramBotUsername:c.telegramBotUsername, officialFastWatch:!!c.officialFastWatch, integrated:true, wallet: !!c.privyAppId, privyAppId:c.privyAppId,
     launch: !!(c.launchesEnabled && c.suffix && c.rpcUrl && c.encryptionKey),
     claims: !!(c.payoutsEnabled && c.rpcUrl && c.treasurySecret && c.operatorSecret),
     suffix: c.suffix || null, mode: c.uiMode || 'live', cluster: c.cluster};

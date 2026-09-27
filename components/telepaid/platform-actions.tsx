@@ -7,7 +7,7 @@ import {rememberVerifiedSession,signOutBrowser,telegramSessionVersionKey,walletD
 import {CopyAddress} from './copy-address';
 import type {RecipientChoice} from './recipient-picker';
 
-type Runtime={integrated?:boolean;telegram:boolean;telegramBotUsername?:string;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
+type Runtime={integrated?:boolean;telegram:boolean;telegramBotUsername?:string;officialFastWatch?:boolean;launch:boolean;claims:boolean;cluster:string;minimumClaimLamports:string};
 type Session={user:{username:string;name:string}|null;csrf?:string;claimVerificationFresh?:boolean;wallets?:string[];claimVerificationExpiresAt?:string;balance?:{earned:string;available:string;reserved:string;settled:string}};
 type Claim={id:string;status:string;signature?:string};
 export type Launch={id:string;mint:string;name:string;symbol?:string;image?:string;status:string;transaction:string;signature?:string;recipientHandle:string;initialBuyLamports:string;networkFeeLamports?:string;launchFormat?:string;buy?:{status:string;transaction:string;signature?:string}};
@@ -37,7 +37,7 @@ export function PlatformProvider({children}:{children:ReactNode}){
  const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
  const refreshAnalytics=useCallback(async()=>{try{setAnalytics(await request<PublicAnalytics>('/api/public/analytics'));setAnalyticsError('');}catch{setAnalyticsError('Activity could not be loaded. Try again.');}},[]);
  const officialMintVisible=liveTokens.some(token=>token.mint==='4iQ4WaAdsqokCd6mW9ntaY5UtFCGLZA8jCheCgS8TeLe');
- useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>{if(document.visibilityState==='visible')void refreshTokens()},officialMintVisible?30000:3000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens,officialMintVisible]);
+ useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>{if(document.visibilityState==='visible')void refreshTokens()},runtime.officialFastWatch&&!officialMintVisible?3000:30000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,runtime?.officialFastWatch,refreshTokens,officialMintVisible]);
  useEffect(()=>{if(!runtime?.integrated)return;void refreshAnalytics();const timer=setInterval(()=>void refreshAnalytics(),30000);const focus=()=>void refreshAnalytics();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshAnalytics]);
  useEffect(()=>{if(runtime?.integrated&&session.balance?.settled!==undefined)void refreshAnalytics()},[runtime?.integrated,session.balance?.settled,refreshAnalytics]);
  const refresh=useCallback(async()=>{

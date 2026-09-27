@@ -16,7 +16,7 @@ import {recordCollection,finishClaim} from './ledger.mjs';
 import {syncOfficialMints} from './official-mints.mjs';
 
 export async function workerTick({db,config,chain}) {
- if(config.rpcUrl)await syncOfficialMints({db,chain});
+ if(config.rpcUrl&&config.officialFastWatch)await syncOfficialMints({db,chain});
  const {rows:launches}=await db.query("SELECT * FROM launches WHERE status='submitted' ORDER BY created_at LIMIT 50");
  for(const launch of launches){
   const state=await chain.status(launch.signature,launch.last_valid_height);
@@ -130,7 +130,7 @@ if(import.meta.url===`file://${process.argv[1]}`){
  // Watch the reserved project mint while it is unlaunched. The regular worker
  // remains on its 10-second schedule so fee collection is not polled faster.
  let officialBusy=false;
- const officialTimer=config.rpcUrl?setInterval(()=>{
+ const officialTimer=config.rpcUrl&&config.officialFastWatch?setInterval(()=>{
   if(stop||officialBusy)return;
   officialBusy=true;
   void db.query("SELECT 1 FROM official_mints WHERE status='waiting' LIMIT 1")
