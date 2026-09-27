@@ -40,13 +40,15 @@ export async function workerTick({db,config,chain}) {
  if(!config.operatorSecret||!config.treasurySecret)return;
  const operator=readKey(config.operatorSecret),treasury=readKey(config.treasurySecret);
  if(operator.publicKey.equals(treasury.publicKey))throw new Error('Use a separate gas payer so user liabilities never pay gas');
- await consolidateTreasuries({db,chain,config,operator,treasury});
+ // An empty previous-treasury list means old custody is intentionally left alone.
+ if(config.previousTreasurySecrets?.length)await consolidateTreasuries({db,chain,config,operator,treasury});
  const {rows:jobs}=await db.query("SELECT * FROM jobs WHERE status IN ('queued','submitted') ORDER BY created_at LIMIT 50");
  for(const job of jobs){
   if(job.status==='queued'&&job.kind==='claim'&&!config.payoutsEnabled)continue;
   if(job.status==='queued'&&job.kind!=='claim'&&!config.collectionsEnabled)continue;
   let current=job;
   const launch=job.launch_id?(await db.query('SELECT * FROM launches WHERE id=$1',[job.launch_id])).rows[0]:null;
+  if(job.status==='queued'&&launch?.fee_mode==='sharing-v1'&&!treasuryKeys(config).has(launch.fee_treasury))continue;
   if(job.status==='queued'){
    let prepared;
    if(job.kind==='claim'){
@@ -100,6 +102,7 @@ export async function workerTick({db,config,chain}) {
  if(chain.sharingReceived){
   const shared=await tokenBatch(db,'fees');
   for(const launch of shared){try{
+   if(!treasuryKeys(config).has(launch.fee_treasury))continue;
    await chain.verifySharing(launch.mint,launch.fee_treasury);
    await indexAddress({db,connection:chain.connection,launchId:launch.id,address:creatorVaultPda(new PublicKey(launch.creator)),kind:'fees',process:async s=>{
     if((await db.query('SELECT 1 FROM sharing_scans WHERE launch_id=$1 AND signature=$2',[launch.id,s.signature])).rowCount)return;
@@ -112,6 +115,7 @@ export async function workerTick({db,config,chain}) {
  if(config.collectionsEnabled){
   const eligible=await tokenBatch(db,'collection');
   for(const launch of eligible){try{
+   if(launch.fee_mode==='sharing-v1'&&!treasuryKeys(config).has(launch.fee_treasury))continue;
    const pending=await db.query("SELECT 1 FROM jobs WHERE launch_id=$1 AND (status IN ('queued','submitted') OR kind='sweep' AND status='failed') LIMIT 1",[launch.id]);if(pending.rowCount)continue;
    const amount=await chain.sdk.getCreatorVaultBalanceBothPrograms(new PublicKey(launch.creator));
    if(BigInt(amount.toString())>=config.collectionThreshold)await db.query("INSERT INTO jobs(id,kind,launch_id) VALUES($1,'collect',$2) ON CONFLICT DO NOTHING",[randomUUID(),launch.id]);

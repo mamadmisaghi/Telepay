@@ -24,6 +24,8 @@ async function fixture(){
  await pg.exec(await readFile(new URL('../migrations/005_worker_operations.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/006_treasury_rotation.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/007_official_mint.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/008_retract_official_mint.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/009_new_official_mint.sql',import.meta.url),'utf8'));
  const adapt=client=>({query:async(sql,args)=>{if(sql.startsWith('SELECT pg_'))return {rows:[],rowCount:1};const r=await client.query(sql,args);return {...r,rowCount:Math.max(r.affectedRows||0,r.rows.length)};}});
  const db={...adapt(pg),transaction:fn=>pg.transaction(tx=>fn(adapt(tx))),close:()=>pg.close()};
  const config=configFromEnv({PUBLIC_ORIGIN:'http://localhost:8080',TELEGRAM_CLIENT_ID:'123',TELEGRAM_CLIENT_SECRET:'test-secret',PAYOUTS_ENABLED:'true',KEY_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')});
@@ -645,6 +647,19 @@ test('old locked sharing destinations remain collectible after treasury rotation
   await workerTick({...f,chain});assert.equal(built,1);
   assert.equal((await f.db.query('SELECT earned FROM balances')).rows[0].earned,'8000');
   assert.equal((await f.db.query("SELECT status FROM jobs WHERE id='old-collect'")).rows[0].status,'confirmed');
+ }finally{await f.db.close()}
+});
+
+test('switching treasury without prior keys leaves old shared-fee jobs and balances untouched',async()=>{
+ const f=await fixture();try{
+  const old=Keypair.generate(),treasury=Keypair.generate(),operator=Keypair.generate();
+  Object.assign(f.config,{collectionsEnabled:true,treasurySecret:bs58.encode(treasury.secretKey),operatorSecret:bs58.encode(operator.secretKey),previousTreasurySecrets:[]});
+  await f.db.query("UPDATE launches SET fee_mode='sharing-v1',fee_treasury=$1 WHERE id='launch1'",[old.publicKey.toBase58()]);
+  await f.db.query("INSERT INTO jobs(id,kind,launch_id) VALUES('old-collect','collect','launch1')");
+  const chain={checkNetwork:async()=>{},connection:{getAccountInfo:async()=>null,getBalance:async()=>{throw Error('Old treasury must not be touched')}},verifySharing:async()=>{throw Error('Old sharing must not be scanned')},sdk:{getCreatorVaultBalanceBothPrograms:async()=>({toString:()=> '0'})}};
+  await workerTick({...f,chain});
+  assert.equal((await f.db.query("SELECT status FROM jobs WHERE id='old-collect'")).rows[0].status,'queued');
+  assert.equal((await f.db.query('SELECT count(*)::int AS total FROM treasury_transfers')).rows[0].total,0);
  }finally{await f.db.close()}
 });
 

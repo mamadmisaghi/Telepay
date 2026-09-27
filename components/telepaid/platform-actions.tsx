@@ -36,7 +36,7 @@ export function PlatformProvider({children}:{children:ReactNode}){
  const sessionEpoch=useRef(0),detachedLogout=useRef(false);
  const refreshTokens=useCallback(async()=>{try{const rows=await request<{tokens:PublicToken[]}>('/api/public/tokens');setLiveTokens(rows.tokens.map(r=>fromPublicToken(r)));setTokensError('');}catch{setTokensError('Live launches could not be loaded. Try again.');}},[]);
  const refreshAnalytics=useCallback(async()=>{try{setAnalytics(await request<PublicAnalytics>('/api/public/analytics'));setAnalyticsError('');}catch{setAnalyticsError('Activity could not be loaded. Try again.');}},[]);
- const officialMintVisible=liveTokens.some(token=>token.mint==='G3odGzwyaYgjzwh5yUizB5WEh8MEdW1wg4TpjGVnTeLe');
+ const officialMintVisible=liveTokens.some(token=>token.mint==='4iQ4WaAdsqokCd6mW9ntaY5UtFCGLZA8jCheCgS8TeLe');
  useEffect(()=>{if(!runtime?.integrated)return;void refreshTokens();const timer=setInterval(()=>{if(document.visibilityState==='visible')void refreshTokens()},officialMintVisible?30000:3000);const focus=()=>void refreshTokens();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshTokens,officialMintVisible]);
  useEffect(()=>{if(!runtime?.integrated)return;void refreshAnalytics();const timer=setInterval(()=>void refreshAnalytics(),30000);const focus=()=>void refreshAnalytics();window.addEventListener('focus',focus);return()=>{clearInterval(timer);window.removeEventListener('focus',focus)}},[runtime?.integrated,refreshAnalytics]);
  useEffect(()=>{if(runtime?.integrated&&session.balance?.settled!==undefined)void refreshAnalytics()},[runtime?.integrated,session.balance?.settled,refreshAnalytics]);
