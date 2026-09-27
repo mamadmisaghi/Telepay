@@ -24,6 +24,12 @@ export async function buildApp({db,config,chain,verifyIdentity,fetcher,logger=fa
   reply.code(status).send({error:status>=500?'Service is not ready. Please try again shortly.':err.name==='ZodError'?'Check the token details and try again.':err.message});
  });
  app.addHook('onRequest',async(req,reply)=>{
+  // Keep the healthcheck alive while all public routes, static assets and API
+  // endpoints are temporarily unavailable. The fee worker is a separate service.
+  if(config.sitePaused && req.url.split('?')[0]!=='/api/health'){
+   reply.code(503).header('Cache-Control','no-store').header('Retry-After','3600').send();
+   return;
+  }
   // Public static files never bypass authentication for /api routes.
   if(config.staticDir&&!req.url.split('?')[0].startsWith('/api/')&&['GET','HEAD'].includes(req.method))return;
   if(!req.url.startsWith('/api/metadata/')&&!req.url.startsWith('/api/m/'))reply.header('Cache-Control','no-store');

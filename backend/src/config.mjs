@@ -13,6 +13,7 @@ export function configFromEnv(env = process.env) {
   if(!Array.isArray(previousTreasurySecrets)||previousTreasurySecrets.length>16||previousTreasurySecrets.some(k=>typeof k!=='string'||!k))throw new Error('Invalid previous treasury configuration');
   return {
     origin, production: env.NODE_ENV === 'production', port: Number(env.PORT || 3001),
+    sitePaused: env.SITE_PAUSED === 'true',
     privyAppId: env.PRIVY_APP_ID || '',
     uiMode: env.UI_MODE === 'preview' ? 'preview' : 'live',
     staticDir: env.STATIC_DIR || '',
