@@ -456,6 +456,8 @@ test('real Pump simulation events decode and cannot be spoofed by another progra
 
 test('market indexing persists actual trades once, excludes failures and reports the live curve price',async()=>{
  const f=await fixture();const {marketService}=await import('../src/market.mjs');const snapshot=JSON.parse(await readFile(new URL('./fixtures/atomic-simulation.json',import.meta.url),'utf8'));
+ // The API intentionally shows only recent trades; keep the saved chain fixture within that window.
+ snapshot.blockTime=Math.floor(Date.now()/1000);
  try{
   const token={id:'launch1',mint:snapshot.mint};let fetches=0;
   const chain={checkNetwork:async()=>{},sdk:{fetchBondingCurve:async()=>({complete:false,virtualQuoteReserves:30000000000n,virtualTokenReserves:1000000000000000n})},connection:{getSignaturesForAddress:async()=>[{signature:snapshot.signature,err:null}],getTransaction:async(_signature,options)=>{assert.equal(options.maxSupportedTransactionVersion,1);fetches++;return snapshot;}}};
